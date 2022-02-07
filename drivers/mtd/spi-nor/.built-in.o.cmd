@@ -1,0 +1,1 @@
+cmd_drivers/mtd/spi-nor/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/mtd/spi-nor/built-in.o drivers/mtd/spi-nor/spi-nor.o drivers/mtd/spi-nor/fsl-quadspi.o 

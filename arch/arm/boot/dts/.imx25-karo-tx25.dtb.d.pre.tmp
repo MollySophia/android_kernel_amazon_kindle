@@ -1,0 +1,2 @@
+imx25-karo-tx25.o: arch/arm/boot/dts/imx25-karo-tx25.dts \
+ arch/arm/boot/dts/imx25.dtsi arch/arm/boot/dts/skeleton.dtsi

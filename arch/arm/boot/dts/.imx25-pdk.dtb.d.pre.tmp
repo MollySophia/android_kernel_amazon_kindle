@@ -1,0 +1,2 @@
+imx25-pdk.o: arch/arm/boot/dts/imx25-pdk.dts arch/arm/boot/dts/imx25.dtsi \
+ arch/arm/boot/dts/skeleton.dtsi

@@ -1,0 +1,1 @@
+cmd_drivers/i2c/algos/i2c-algo-pcf.ko := /home/molly/kt3_ll_511_210/ll_511_210_build/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL -r  -T /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/scripts/module-common.lds --build-id  -o drivers/i2c/algos/i2c-algo-pcf.ko drivers/i2c/algos/i2c-algo-pcf.o drivers/i2c/algos/i2c-algo-pcf.mod.o

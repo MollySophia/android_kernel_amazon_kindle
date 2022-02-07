@@ -1,0 +1,3 @@
+vf610-twr.o: arch/arm/boot/dts/vf610-twr.dts arch/arm/boot/dts/vf610.dtsi \
+ arch/arm/boot/dts/skeleton.dtsi arch/arm/boot/dts/vf610-pinfunc.h \
+ /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/arch/arm/boot/dts/include/dt-bindings/clock/vf610-clock.h

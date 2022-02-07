@@ -1,0 +1,2 @@
+imx53-smd.o: arch/arm/boot/dts/imx53-smd.dts arch/arm/boot/dts/imx53.dtsi \
+ arch/arm/boot/dts/skeleton.dtsi arch/arm/boot/dts/imx53-pinfunc.h

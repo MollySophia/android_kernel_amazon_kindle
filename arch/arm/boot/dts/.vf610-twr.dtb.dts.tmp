@@ -1,0 +1,526 @@
+# 1 "arch/arm/boot/dts/vf610-twr.dts"
+# 1 "<built-in>"
+# 1 "<command-line>"
+# 1 "arch/arm/boot/dts/vf610-twr.dts"
+# 10 "arch/arm/boot/dts/vf610-twr.dts"
+/dts-v1/;
+# 1 "arch/arm/boot/dts/vf610.dtsi" 1
+# 10 "arch/arm/boot/dts/vf610.dtsi"
+# 1 "arch/arm/boot/dts/skeleton.dtsi" 1
+
+
+
+
+
+
+/ {
+ #address-cells = <1>;
+ #size-cells = <1>;
+ chosen { };
+ aliases { };
+ memory { device_type = "memory"; reg = <0 0>; };
+};
+# 11 "arch/arm/boot/dts/vf610.dtsi" 2
+# 1 "arch/arm/boot/dts/vf610-pinfunc.h" 1
+# 12 "arch/arm/boot/dts/vf610.dtsi" 2
+# 1 "/home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/arch/arm/boot/dts/include/dt-bindings/clock/vf610-clock.h" 1
+# 13 "arch/arm/boot/dts/vf610.dtsi" 2
+
+/ {
+ aliases {
+  serial0 = &uart0;
+  serial1 = &uart1;
+  serial2 = &uart2;
+  serial3 = &uart3;
+  serial4 = &uart4;
+  serial5 = &uart5;
+  gpio0 = &gpio1;
+  gpio1 = &gpio2;
+  gpio2 = &gpio3;
+  gpio3 = &gpio4;
+  gpio4 = &gpio5;
+ };
+
+ cpus {
+  #address-cells = <1>;
+  #size-cells = <0>;
+
+  cpu@0 {
+   compatible = "arm,cortex-a5";
+   device_type = "cpu";
+   reg = <0x0>;
+   next-level-cache = <&L2>;
+  };
+ };
+
+ clocks {
+  #address-cells = <1>;
+  #size-cells = <0>;
+
+  sxosc {
+   compatible = "fixed-clock";
+   clock-frequency = <32768>;
+  };
+
+  fxosc {
+   compatible = "fixed-clock";
+   clock-frequency = <24000000>;
+  };
+ };
+
+ soc {
+  #address-cells = <1>;
+  #size-cells = <1>;
+  compatible = "simple-bus";
+  interrupt-parent = <&intc>;
+  ranges;
+
+  aips0: aips-bus@40000000 {
+   compatible = "fsl,aips-bus", "simple-bus";
+   #address-cells = <1>;
+   #size-cells = <1>;
+   interrupt-parent = <&intc>;
+   reg = <0x40000000 0x70000>;
+   ranges;
+
+   intc: interrupt-controller@40002000 {
+    compatible = "arm,cortex-a9-gic";
+    #interrupt-cells = <3>;
+    #address-cells = <1>;
+    #size-cells = <1>;
+    interrupt-controller;
+    reg = <0x40003000 0x1000>,
+          <0x40002100 0x100>;
+   };
+
+   L2: l2-cache@40006000 {
+    compatible = "arm,pl310-cache";
+    reg = <0x40006000 0x1000>;
+    cache-unified;
+    cache-level = <2>;
+    arm,data-latency = <1 1 1>;
+    arm,tag-latency = <2 2 2>;
+   };
+
+   uart0: serial@40027000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x40027000 0x1000>;
+    interrupts = <0 61 0x00>;
+    clocks = <&clks 39>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   uart1: serial@40028000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x40028000 0x1000>;
+    interrupts = <0 62 0x04>;
+    clocks = <&clks 40>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   uart2: serial@40029000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x40029000 0x1000>;
+    interrupts = <0 63 0x04>;
+    clocks = <&clks 41>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   uart3: serial@4002a000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x4002a000 0x1000>;
+    interrupts = <0 64 0x04>;
+    clocks = <&clks 42>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   sai2: sai@40031000 {
+    compatible = "fsl,vf610-sai";
+    reg = <0x40031000 0x1000>;
+    interrupts = <0 86 0x04>;
+    clocks = <&clks 108>;
+    clock-names = "sai";
+    status = "disabled";
+   };
+
+   pit: pit@40037000 {
+    compatible = "fsl,vf610-pit";
+    reg = <0x40037000 0x1000>;
+    interrupts = <0 39 0x04>;
+    clocks = <&clks 45>;
+    clock-names = "pit";
+   };
+
+   wdog@4003e000 {
+    compatible = "fsl,vf610-wdt", "fsl,imx21-wdt";
+    reg = <0x4003e000 0x1000>;
+    clocks = <&clks 76>;
+    clock-names = "wdog";
+   };
+
+   qspi0: quadspi@40044000 {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    compatible = "fsl,vf610-qspi";
+    reg = <0x40044000 0x1000>;
+    interrupts = <0 24 0x04>;
+    clocks = <&clks 116>,
+     <&clks 125>;
+    clock-names = "qspi_en", "qspi";
+    status = "disabled";
+   };
+
+   iomuxc: iomuxc@40048000 {
+    compatible = "fsl,vf610-iomuxc";
+    reg = <0x40048000 0x1000>;
+    #gpio-range-cells = <2>;
+
+
+
+    dcu0 {
+     pinctrl_dcu0_1: dcu0grp_1 {
+      fsl,pins = <
+      0x078 0x000 0x0 0x0 0x42
+      0x1A4 0x000 0x1 0x0 0x42
+      0x1A8 0x000 0x1 0x0 0x42
+      0x1AC 0x000 0x1 0x0 0x42
+      0x1B4 0x000 0x1 0x0 0x42
+      0x1B8 0x000 0x1 0x0 0x42
+      0x1BC 0x000 0x1 0x0 0x42
+      0x1C0 0x000 0x1 0x0 0x42
+      0x1C4 0x000 0x1 0x0 0x42
+      0x1C8 0x000 0x1 0x0 0x42
+      0x1CC 0x000 0x1 0x0 0x42
+      0x1D0 0x000 0x1 0x0 0x42
+      0x1D4 0x000 0x1 0x0 0x42
+      0x1D8 0x000 0x1 0x0 0x42
+      0x1DC 0x000 0x1 0x0 0x42
+      0x1E0 0x000 0x1 0x0 0x42
+      0x1E4 0x000 0x1 0x0 0x42
+      0x1E8 0x000 0x1 0x0 0x42
+      0x1EC 0x000 0x1 0x0 0x42
+      0x1F0 0x000 0x1 0x0 0x42
+      0x1F4 0x000 0x1 0x0 0x42
+      0x1F8 0x000 0x1 0x0 0x42
+      0x1FC 0x000 0x1 0x0 0x42
+      0x200 0x000 0x1 0x0 0x42
+      0x204 0x000 0x1 0x0 0x42
+      0x208 0x000 0x1 0x0 0x42
+      0x20C 0x000 0x1 0x0 0x42
+      0x210 0x000 0x1 0x0 0x42
+      0x214 0x000 0x1 0x0 0x42
+      >;
+     };
+    };
+
+    dspi0 {
+     pinctrl_dspi0_1: dspi0grp_1 {
+      fsl,pins = <
+      0x0A4 0x000 0x1 0x0 0x1182
+      0x0A8 0x000 0x1 0x0 0x1181
+      0x0AC 0x000 0x1 0x0 0x1182
+      0x0B0 0x000 0x1 0x0 0x1182
+      >;
+     };
+    };
+
+    esdhc1 {
+     pinctrl_esdhc1_1: esdhc1grp_1 {
+      fsl,pins = <
+      0x038 0x000 0x5 0x0 0x31ef
+      0x03C 0x000 0x5 0x0 0x31ef
+      0x040 0x000 0x5 0x0 0x31ef
+      0x044 0x000 0x5 0x0 0x31ef
+      0x048 0x000 0x5 0x0 0x31ef
+      0x04C 0x000 0x5 0x0 0x31ef
+      0x218 0x000 0x0 0x0 0x219d
+      >;
+     };
+    };
+
+    fec0 {
+     pinctrl_fec0_1: fec0grp_1 {
+      fsl,pins = <
+      0x000 0x2F0 0x2 0x0 0x30d1
+      0x0B4 0x000 0x1 0x0 0x30d3
+      0x0B8 0x000 0x1 0x0 0x30d1
+      0x0BC 0x000 0x1 0x0 0x30d1
+      0x0C0 0x000 0x1 0x0 0x30d1
+      0x0C4 0x000 0x1 0x0 0x30d1
+      0x0C8 0x000 0x1 0x0 0x30d1
+      0x0CC 0x000 0x1 0x0 0x30d2
+      0x0D0 0x000 0x1 0x0 0x30d2
+      0x0D4 0x000 0x1 0x0 0x30d2
+      >;
+     };
+    };
+
+    fec1 {
+     pinctrl_fec1_1: fec1grp_1 {
+      fsl,pins = <
+      0x0D8 0x000 0x1 0x0 0x30d2
+      0x0DC 0x000 0x1 0x0 0x30d3
+      0x0E0 0x000 0x1 0x0 0x30d1
+      0x0E4 0x000 0x1 0x0 0x30d1
+      0x0E8 0x000 0x1 0x0 0x30d1
+      0x0EC 0x000 0x1 0x0 0x30d1
+      0x0F0 0x000 0x1 0x0 0x30d2
+      0x0F4 0x000 0x1 0x0 0x30d2
+      0x0F8 0x000 0x1 0x0 0x30d2
+      >;
+     };
+    };
+
+    i2c0 {
+     pinctrl_i2c0_1: i2c0grp_1 {
+      fsl,pins = <
+      0x090 0x33C 0x2 0x1 0x30d3
+      0x094 0x340 0x2 0x1 0x30d3
+      >;
+     };
+    };
+
+    pwm0 {
+     pinctrl_pwm0_1: pwm0grp_1 {
+      fsl,pins = <
+      0x058 0x000 0x1 0x0 0x1582
+      0x05C 0x000 0x1 0x0 0x1582
+      0x060 0x000 0x1 0x0 0x1582
+      0x064 0x000 0x1 0x0 0x1582
+      0x070 0x000 0x1 0x0 0x1582
+      0x074 0x000 0x1 0x0 0x1582
+      >;
+     };
+    };
+
+    qspi0 {
+     pinctrl_qspi0_1: qspi0grp_1 {
+      fsl,pins = <
+      0x13C 0x000 0x1 0x0 0x307b
+      0x140 0x000 0x1 0x0 0x307f
+      0x144 0x000 0x1 0x0 0x3073
+      0x148 0x000 0x1 0x0 0x3073
+      0x14C 0x000 0x1 0x0 0x3073
+      0x150 0x000 0x1 0x0 0x307b
+      0x158 0x000 0x1 0x0 0x307b
+      0x15C 0x000 0x1 0x0 0x307f
+      0x160 0x000 0x1 0x0 0x3073
+      0x164 0x000 0x1 0x0 0x3073
+      0x168 0x000 0x1 0x0 0x3073
+      0x16C 0x000 0x1 0x0 0x307b
+      >;
+     };
+    };
+
+    sai2 {
+     pinctrl_sai2_1: sai2grp_1 {
+      fsl,pins = <
+      0x018 0x370 0x5 0x0 0x02ed
+      0x020 0x000 0x5 0x0 0x02ee
+      0x024 0x000 0x5 0x0 0x02ed
+      0x02C 0x364 0x5 0x0 0x02ed
+      0x030 0x368 0x5 0x0 0x02ed
+      0x034 0x36C 0x5 0x0 0x02ed
+      0x0A0 0x2EC 0x2 0x2 0x02ed
+      >;
+     };
+    };
+
+    uart1 {
+     pinctrl_uart1_1: uart1grp_1 {
+      fsl,pins = <
+      0x068 0x380 0x2 0x0 0x21a2
+      0x06C 0x37C 0x2 0x0 0x21a1
+      >;
+     };
+    };
+
+    usbvbus {
+     pinctrl_usbvbus_1: usbvbusgrp_1 {
+      fsl,pins = <
+      0x038 0x000 0x2 0x0 0x219c
+      0x018 0x000 0x2 0x0 0x219c
+      >;
+     };
+    };
+
+   };
+
+   gpio1: gpio@40049000 {
+    compatible = "fsl,vf610-gpio";
+    reg = <0x40049000 0x1000 0x400ff000 0x40>;
+    interrupts = <0 107 0x04>;
+    gpio-controller;
+    #gpio-cells = <2>;
+    interrupt-controller;
+    #interrupt-cells = <2>;
+    gpio-ranges = <&iomuxc 0 32>;
+   };
+
+   gpio2: gpio@4004a000 {
+    compatible = "fsl,vf610-gpio";
+    reg = <0x4004a000 0x1000 0x400ff040 0x40>;
+    interrupts = <0 108 0x04>;
+    gpio-controller;
+    #gpio-cells = <2>;
+    interrupt-controller;
+    #interrupt-cells = <2>;
+    gpio-ranges = <&iomuxc 32 32>;
+   };
+
+   gpio3: gpio@4004b000 {
+    compatible = "fsl,vf610-gpio";
+    reg = <0x4004b000 0x1000 0x400ff080 0x40>;
+    interrupts = <0 109 0x04>;
+    gpio-controller;
+    #gpio-cells = <2>;
+    interrupt-controller;
+    #interrupt-cells = <2>;
+    gpio-ranges = <&iomuxc 64 32>;
+   };
+
+   gpio4: gpio@4004c000 {
+    compatible = "fsl,vf610-gpio";
+    reg = <0x4004c000 0x1000 0x400ff0c0 0x40>;
+    interrupts = <0 110 0x04>;
+    gpio-controller;
+    #gpio-cells = <2>;
+    interrupt-controller;
+    #interrupt-cells = <2>;
+    gpio-ranges = <&iomuxc 96 32>;
+   };
+
+   gpio5: gpio@4004d000 {
+    compatible = "fsl,vf610-gpio";
+    reg = <0x4004d000 0x1000 0x400ff100 0x40>;
+    interrupts = <0 111 0x04>;
+    gpio-controller;
+    #gpio-cells = <2>;
+    interrupt-controller;
+    #interrupt-cells = <2>;
+    gpio-ranges = <&iomuxc 128 7>;
+   };
+
+   anatop@40050000 {
+    compatible = "fsl,vf610-anatop";
+    reg = <0x40050000 0x1000>;
+   };
+
+   i2c0: i2c@40066000 {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    compatible = "fsl,vf610-i2c";
+    reg = <0x40066000 0x1000>;
+    interrupts =<0 71 0x04>;
+    clocks = <&clks 46>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   clks: ccm@4006b000 {
+    compatible = "fsl,vf610-ccm";
+    reg = <0x4006b000 0x1000>;
+    #clock-cells = <1>;
+   };
+  };
+
+  aips1: aips-bus@40080000 {
+   compatible = "fsl,aips-bus", "simple-bus";
+   #address-cells = <1>;
+   #size-cells = <1>;
+   reg = <0x40080000 0x80000>;
+   ranges;
+
+   uart4: serial@400a9000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x400a9000 0x1000>;
+    interrupts = <0 65 0x04>;
+    clocks = <&clks 43>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   uart5: serial@400aa000 {
+    compatible = "fsl,vf610-lpuart";
+    reg = <0x400aa000 0x1000>;
+    interrupts = <0 66 0x04>;
+    clocks = <&clks 44>;
+    clock-names = "ipg";
+    status = "disabled";
+   };
+
+   fec0: ethernet@400d0000 {
+    compatible = "fsl,mvf600-fec";
+    reg = <0x400d0000 0x1000>;
+    interrupts = <0 78 0x04>;
+    clocks = <&clks 148>,
+     <&clks 148>,
+     <&clks 69>;
+    clock-names = "ipg", "ahb", "ptp";
+    status = "disabled";
+   };
+
+   fec1: ethernet@400d1000 {
+    compatible = "fsl,mvf600-fec";
+    reg = <0x400d1000 0x1000>;
+    interrupts = <0 79 0x04>;
+    clocks = <&clks 149>,
+     <&clks 149>,
+     <&clks 69>;
+    clock-names = "ipg", "ahb", "ptp";
+    status = "disabled";
+   };
+  };
+ };
+};
+# 12 "arch/arm/boot/dts/vf610-twr.dts" 2
+
+/ {
+ model = "VF610 Tower Board";
+ compatible = "fsl,vf610-twr", "fsl,vf610";
+
+ chosen {
+  bootargs = "console=ttyLP1,115200";
+ };
+
+ memory {
+  reg = <0x80000000 0x8000000>;
+ };
+
+ clocks {
+  audio_ext {
+   compatible = "fixed-clock";
+   clock-frequency = <24576000>;
+  };
+
+  enet_ext {
+   compatible = "fixed-clock";
+   clock-frequency = <50000000>;
+  };
+ };
+
+};
+
+&fec0 {
+ phy-mode = "rmii";
+ pinctrl-names = "default";
+ pinctrl-0 = <&pinctrl_fec0_1>;
+ status = "okay";
+};
+
+&fec1 {
+ phy-mode = "rmii";
+ pinctrl-names = "default";
+ pinctrl-0 = <&pinctrl_fec1_1>;
+ status = "okay";
+};
+
+&uart1 {
+ pinctrl-names = "default";
+ pinctrl-0 = <&pinctrl_uart1_1>;
+ status = "okay";
+};

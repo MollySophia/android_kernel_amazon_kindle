@@ -1,0 +1,6 @@
+kernel/sound/soc/codecs/snd-soc-max98090.ko
+kernel/sound/soc/fsl/snd-soc-fsl-sai.ko
+kernel/sound/soc/fsl/snd-soc-fsl-ssi.ko
+kernel/sound/soc/fsl/snd-soc-fsl-utils.ko
+kernel/sound/soc/fsl/snd-soc-imx-audmux.ko
+kernel/sound/soc/fsl/snd-soc-imx-max98090.ko

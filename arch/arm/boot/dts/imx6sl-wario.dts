@@ -1,0 +1,33 @@
+/dts-v1/;
+
+#include "imx6sl.dtsi"
+
+/ {
+	model = "Wario 5, Config D";
+	compatible = "amzn,wario5d", "fsl,imx6sl";
+
+
+	memory {
+		reg = <0x80000000 0x20000000>;
+	};
+};
+
+
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart1_1>;
+	status = "okay";
+};
+
+&usdhc2 {
+	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+	pinctrl-0 = <&pinctrl_usdhc2_1>;
+	pinctrl-1 = <&pinctrl_usdhc2_1_100mhz>;
+	pinctrl-2 = <&pinctrl_usdhc2_1_200mhz>;
+	non-removable;
+	keep-power-in-suspend;
+	enable-sdio-wakeup;
+	bus-width = <8>;
+	fsl,delay-line;
+	status = "okay";
+};

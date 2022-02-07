@@ -1,0 +1,2 @@
+kernel/drivers/misc/bt_pwr_ctrl.ko
+kernel/drivers/misc/eeprom/at24.ko

@@ -1,0 +1,3 @@
+imx51-babbage.o: arch/arm/boot/dts/imx51-babbage.dts \
+ arch/arm/boot/dts/imx51.dtsi arch/arm/boot/dts/skeleton.dtsi \
+ arch/arm/boot/dts/imx51-pinfunc.h

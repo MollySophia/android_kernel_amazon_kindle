@@ -1,0 +1,316 @@
+/dts-v1/;
+
+#include "imx6sl.dtsi"
+
+/ {
+	model = "Fox P0";
+	compatible = "amzn,fox", "fsl,imx6sl";
+
+	memory {
+		reg = <0x80000000 0x20000000>;
+	};
+
+	/* gpio-keys is only applicable for FOX P0. For P1 with HW changes, keymap driver will be used.
+	* support wakeup only for 2 buttons for now - MIC and BT PAIR.
+	* key code could be found in input.h.
+	* Last value in gpios property is 1 - ACTIVE_LOW.
+	*/
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		volume-up {
+			label = "Volume Up";
+			gpios = <&gpio3 27 1>;
+			linux,code = <115>; /* KEY_VOLUMEUP */
+			debounce_interval = <20>;
+		};
+
+		volume-down {
+			label = "Volume Down";
+			gpios = <&gpio3 29 1>;
+			linux,code = <114>; /* KEY_VOLUMEDOWN */
+			debounce_interval = <20>;
+		};
+		mic {
+			label = "Mic";
+			gpios = <&gpio3 25 1>;
+			linux,code = <143>; /* KEY_WAKEUP - there is no KEY_MIC code. */
+			debounce_interval = <20>;
+			gpio-key,wakeup;
+		};
+		play {
+			label = "Play";
+			gpios = <&gpio4 3 1>;
+			linux,code = <164>; /* KEY_PLAYPAUSE */
+			debounce_interval = <20>;
+		};
+		forward {
+			label = "Forward";
+			gpios = <&gpio3 31 1>;
+			linux,code = <159>; /* KEY_FORWARD */
+			debounce_interval = <20>;
+		};
+		rewind {
+			label = "Rewind";
+			gpios = <&gpio4 1 1>;
+			linux,code = <168>; /* KEY_REWIND */
+			debounce_interval = <20>;
+		};
+		bt-pair {
+			label = "Bluetooth Pair";
+			gpios = <&gpio4 5 1>;
+			linux,code = <218>; /* KEY_CONNECT - there is no BT_PAIR code. */
+			debounce_interval = <20>;
+			gpio-key,wakeup;
+		};
+		/* There is no POWER KEY for FOX P0. */
+
+	};
+
+	sound {
+		compatible = "fsl,imx-audio-max98090";
+		model = "MAX98090-audio";
+		cpu-dai = <&ssi2>;
+		audio-codec = <&codec>;
+		audio-routing =
+			"Main SpeakerL", "RCVL",
+			"Main SpeakerR", "RCVR",
+			"Line Jack", "IN3",
+			"Line Jack", "IN5",
+			"AMIC", "IN1",
+			"AMIC", "IN2";
+		mux-int-port = <2>;
+		mux-ext-port = <3>;
+		mic-det-gpios = <&gpio4 22 1>;
+	};
+};
+
+&epdc {
+	status = "disabled";
+};
+
+&kpp {
+	status = "disabled";
+};
+
+&usdhc1 {
+	status = "disabled";
+};
+
+&uart2 {
+	status = "disabled";
+};
+
+&uart4 {
+	status = "disabled";
+};
+
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart1_1>;
+	status = "okay";
+};
+
+&uart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart3_1>;
+	fsl,uart-has-rtscts;
+	status = "okay";
+};
+
+&usdhc2 {
+	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+	pinctrl-0 = <&pinctrl_usdhc2_1>;
+	pinctrl-1 = <&pinctrl_usdhc2_1_100mhz>;
+	pinctrl-2 = <&pinctrl_usdhc2_1_200mhz>;
+	non-removable;
+	keep-power-in-suspend;
+	enable-sdio-wakeup;
+	bus-width = <8>;
+	fsl,delay-line;
+	status = "okay";
+};
+
+&usdhc3 {
+	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+	pinctrl-0 = <&pinctrl_usdhc3_1>;
+	pinctrl-1 = <&pinctrl_usdhc3_1_100mhz>;
+	pinctrl-2 = <&pinctrl_usdhc3_1_200mhz>;
+	non-removable;
+	keep-power-in-suspend;
+	enable-sdio-wakeup;
+	bus-width = <4>;
+	fsl,delay-line;
+	status = "okay";
+};
+
+&i2c1 {
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c1_1>;
+	status = "okay";
+};
+
+&i2c2 {
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c2_1>;
+	status = "okay";
+
+	lp5523@32 {
+		compatible = "ti,lp5523";
+		reg = <0x32>;
+		clock-mode = /bits/ 8 <0>;
+		enable-gpio = <&gpio2 7 0>;
+
+		chan0 {
+			chan-name = "lp5523:channel0";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan1 {
+			chan-name = "lp5523:channel1";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan2 {
+			chan-name = "lp5523:channel2";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan3 {
+			chan-name = "lp5523:channel3";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan4 {
+			chan-name = "lp5523:channel4";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan5 {
+			chan-name = "lp5523:channel5";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan6 {
+			chan-name = "lp5523:channel6";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan7 {
+			chan-name = "lp5523:channel7";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+
+		chan8 {
+			chan-name = "lp5523:channel8";
+			led-cur = /bits/ 8 <150>;
+			max-cur = /bits/ 8 <150>;
+		};
+	};
+};
+
+&i2c3 {
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c3_1>;
+	status = "okay";
+
+	codec: max98090@10 {
+		compatible = "maxim,max98090";
+		reg = <0x10>;
+		interrupt-parent = <&gpio4>;
+		clocks = <&clks IMX6SL_CLK_EXTERN_AUDIO>;
+		clock-names = "mclk";
+		interrupts = <22 2>;
+	};
+};
+
+&audmux {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_audmux3_1>;
+	status = "okay";
+};
+
+/*
+ * pinmux
+ */
+&iomuxc {
+	uart3 {
+		pinctrl_uart3_1: uart3grp-1 {
+			fsl,pins = <
+				/* pull up */
+				MX6SL_PAD_EPDC_BDR1__UART3_CTS_B	0x41b0b1
+				MX6SL_PAD_EPDC_BDR0__UART3_RTS_B	0x41b0b1
+				MX6SL_PAD_EPDC_VCOM0__UART3_RX_DATA	0x41b0b1
+				/* pull down */
+				MX6SL_PAD_EPDC_VCOM1__UART3_TX_DATA	0x4130b1
+			>;
+		};
+	};
+
+	audmux3 {
+		pinctrl_audmux3_1: audmuxgrp3-1 {
+			fsl,pins = <
+				MX6SL_PAD_AUD_RXD__AUD3_RXD		0x4130b0
+				MX6SL_PAD_AUD_TXC__AUD3_TXC		0x4130b0
+				MX6SL_PAD_AUD_TXD__AUD3_TXD		0x4110b0
+				MX6SL_PAD_AUD_TXFS__AUD3_TXFS		0x4130b0
+				MX6SL_PAD_AUD_MCLK__AUDIO_CLK_OUT	0x4130b0
+			>;
+		};
+	};
+
+	audmux4 {
+		pinctrl_audmux4_1: audmux4-1 {
+			fsl,pins = <
+				MX6SL_PAD_ECSPI1_SS0__AUD4_RXD		0x4130b0
+				MX6SL_PAD_ECSPI1_MOSI__AUD4_TXC		0x4130b0
+				MX6SL_PAD_ECSPI1_MISO__AUD4_TXFS	0x4130b0
+				MX6SL_PAD_ECSPI1_SCLK__AUD4_TXD		0x4110b0
+			>;
+		};
+	};
+
+	i2c1 {
+		pinctrl_i2c1_1: i2c1grp-1 {
+			fsl,pins = <
+				MX6SL_PAD_I2C1_SCL__I2C1_SCL		0x404108b1
+				MX6SL_PAD_I2C1_SDA__I2C1_SDA		0x404108b1
+			>;
+		};
+	};
+
+	i2c2 {
+		pinctrl_i2c2_1: i2c2grp-1 {
+			fsl,pins = <
+				MX6SL_PAD_I2C2_SCL__I2C2_SCL		0x404108b0
+				MX6SL_PAD_I2C2_SDA__I2C2_SDA		0x404108b0
+			>;
+		};
+	};
+
+	i2c3 {
+		pinctrl_i2c3_1: i2c3grp-1 {
+			fsl,pins = <
+				MX6SL_PAD_EPDC_SDCE2__I2C3_SCL		0x404108b0
+				MX6SL_PAD_EPDC_SDCE3__I2C3_SDA		0x404108b0
+			>;
+		};
+	};
+
+};
+
+&ssi2 {
+	fsl,mode = "i2s-slave";
+	status = "okay";
+};

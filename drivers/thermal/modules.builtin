@@ -1,0 +1,3 @@
+kernel/drivers/thermal/thermal_sys.ko
+kernel/drivers/thermal/imx_thermal.ko
+kernel/drivers/thermal/device_cooling.ko

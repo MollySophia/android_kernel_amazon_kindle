@@ -1,0 +1,7 @@
+kernel/drivers/regulator/fixed.ko
+kernel/drivers/regulator/virtual.ko
+kernel/drivers/regulator/userspace-consumer.ko
+kernel/drivers/regulator/anatop-regulator.ko
+kernel/drivers/regulator/da9052-regulator.ko
+kernel/drivers/regulator/pfuze100-regulator.ko
+kernel/drivers/regulator/bd7181x-regulator.ko
