@@ -1,6 +1,0 @@
-imx6q-sabresd-enetirq.o: arch/arm/boot/dts/imx6q-sabresd-enetirq.dts \
- arch/arm/boot/dts/imx6q-sabresd.dts arch/arm/boot/dts/imx6q.dtsi \
- arch/arm/boot/dts/imx6q-pinfunc.h arch/arm/boot/dts/imx6qdl.dtsi \
- arch/arm/boot/dts/skeleton.dtsi \
- /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/arch/arm/boot/dts/include/dt-bindings/gpio/gpio.h \
- arch/arm/boot/dts/imx6qdl-sabresd.dtsi

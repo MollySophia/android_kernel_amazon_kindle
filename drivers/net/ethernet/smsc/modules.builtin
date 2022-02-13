@@ -1,3 +1,0 @@
-kernel/drivers/net/ethernet/smsc/smc91x.ko
-kernel/drivers/net/ethernet/smsc/smc911x.ko
-kernel/drivers/net/ethernet/smsc/smsc911x.ko

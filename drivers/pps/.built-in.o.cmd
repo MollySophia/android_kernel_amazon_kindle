@@ -1,1 +1,0 @@
-cmd_drivers/pps/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/pps/built-in.o drivers/pps/pps_core.o drivers/pps/clients/built-in.o drivers/pps/generators/built-in.o 

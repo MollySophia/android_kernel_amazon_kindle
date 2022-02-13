@@ -1,3 +1,0 @@
-imx51-apf51.o: arch/arm/boot/dts/imx51-apf51.dts \
- arch/arm/boot/dts/imx51.dtsi arch/arm/boot/dts/skeleton.dtsi \
- arch/arm/boot/dts/imx51-pinfunc.h

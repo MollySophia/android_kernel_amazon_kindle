@@ -1,6 +1,0 @@
-kernel/drivers/usb/gadget/libcomposite.ko
-kernel/drivers/usb/gadget/usb_f_acm.ko
-kernel/drivers/usb/gadget/u_serial.ko
-kernel/drivers/usb/gadget/g_ether.ko
-kernel/drivers/usb/gadget/g_mass_storage.ko
-kernel/drivers/usb/gadget/g_android.ko

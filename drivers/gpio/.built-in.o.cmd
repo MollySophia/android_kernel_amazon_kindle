@@ -1,1 +1,0 @@
-cmd_drivers/gpio/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/gpio/built-in.o drivers/gpio/devres.o drivers/gpio/gpiolib.o drivers/gpio/gpiolib-of.o drivers/gpio/gpio-generic.o drivers/gpio/gpio-max732x.o drivers/gpio/gpio-mxc.o drivers/gpio/gpio-pca953x.o drivers/gpio/gpio-bd7181x.o 

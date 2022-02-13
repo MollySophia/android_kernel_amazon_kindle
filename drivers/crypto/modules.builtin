@@ -1,8 +1,0 @@
-kernel/drivers/crypto/caam/caam.ko
-kernel/drivers/crypto/caam/caam_jr.ko
-kernel/drivers/crypto/caam/caamalg.ko
-kernel/drivers/crypto/caam/caamhash.ko
-kernel/drivers/crypto/caam/caamrng.ko
-kernel/drivers/crypto/caam/sm_store.ko
-kernel/drivers/crypto/caam/sm_test.ko
-kernel/drivers/crypto/caam/secvio.ko

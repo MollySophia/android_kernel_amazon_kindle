@@ -1,1 +1,0 @@
-cmd_arch/arm/boot/uImage := /bin/sh /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/scripts/mkuboot.sh -A arm -O linux -C none  -T kernel -a 0x80008000 -e 0x80008000 -n 'Linux-3.10.53-lab126' -d arch/arm/boot/zImage arch/arm/boot/uImage

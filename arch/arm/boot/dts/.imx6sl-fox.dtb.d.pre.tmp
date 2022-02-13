@@ -1,4 +1,0 @@
-imx6sl-fox.o: arch/arm/boot/dts/imx6sl-fox.dts \
- arch/arm/boot/dts/imx6sl.dtsi arch/arm/boot/dts/skeleton.dtsi \
- arch/arm/boot/dts/imx6sl-pinfunc.h \
- /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/arch/arm/boot/dts/include/dt-bindings/clock/imx6sl-clock.h

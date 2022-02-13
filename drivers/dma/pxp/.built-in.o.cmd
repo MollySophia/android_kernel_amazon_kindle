@@ -1,1 +1,0 @@
-cmd_drivers/dma/pxp/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/dma/pxp/built-in.o drivers/dma/pxp/pxp_dma_v2.o drivers/dma/pxp/pxp_device.o 

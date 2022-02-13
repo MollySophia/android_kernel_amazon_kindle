@@ -1,1 +1,0 @@
-cmd_drivers/mmc/host/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/mmc/host/built-in.o drivers/mmc/host/sdhci.o drivers/mmc/host/sdhci-pltfm.o drivers/mmc/host/sdhci-esdhc-imx.o 

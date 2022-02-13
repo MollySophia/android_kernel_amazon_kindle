@@ -1,2 +1,0 @@
-imx31-bug.o: arch/arm/boot/dts/imx31-bug.dts arch/arm/boot/dts/imx31.dtsi \
- arch/arm/boot/dts/skeleton.dtsi

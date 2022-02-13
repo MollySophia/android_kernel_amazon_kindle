@@ -1,6 +1,0 @@
-kernel/fs/fat/msdos.ko
-kernel/fs/nls/nls_iso8859-15.ko
-kernel/fs/binfmt_misc.ko
-kernel/fs/isofs/isofs.ko
-kernel/fs/fuse/fuse.ko
-kernel/fs/udf/udf.ko

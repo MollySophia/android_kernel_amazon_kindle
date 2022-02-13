@@ -1,4 +1,0 @@
-kernel/drivers/video/fb.ko
-kernel/drivers/video/cfbfillrect.ko
-kernel/drivers/video/cfbcopyarea.ko
-kernel/drivers/video/cfbimgblt.ko

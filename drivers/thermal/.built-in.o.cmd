@@ -1,1 +1,0 @@
-cmd_drivers/thermal/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/thermal/built-in.o drivers/thermal/thermal_sys.o drivers/thermal/imx_thermal.o drivers/thermal/device_cooling.o 

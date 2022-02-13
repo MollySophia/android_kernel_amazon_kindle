@@ -1,1 +1,0 @@
-cmd_drivers/mfd/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/mfd/built-in.o drivers/mfd/mfd-core.o drivers/mfd/da9052-irq.o drivers/mfd/da9052-core.o drivers/mfd/da9052-i2c.o drivers/mfd/syscon.o drivers/mfd/bd7181x.o drivers/mfd/pmic-events-notifer/built-in.o 

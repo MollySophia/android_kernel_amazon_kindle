@@ -1,1 +1,0 @@
-cmd_drivers/usb/chipidea/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/usb/chipidea/built-in.o drivers/usb/chipidea/ci_hdrc.o drivers/usb/chipidea/ci_hdrc_msm.o drivers/usb/chipidea/usbmisc_imx.o drivers/usb/chipidea/ci_hdrc_imx.o 

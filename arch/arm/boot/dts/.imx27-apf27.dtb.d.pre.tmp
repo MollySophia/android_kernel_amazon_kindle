@@ -1,2 +1,0 @@
-imx27-apf27.o: arch/arm/boot/dts/imx27-apf27.dts \
- arch/arm/boot/dts/imx27.dtsi arch/arm/boot/dts/skeleton.dtsi

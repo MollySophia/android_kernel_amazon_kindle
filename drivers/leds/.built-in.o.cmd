@@ -1,1 +1,0 @@
-cmd_drivers/leds/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o drivers/leds/built-in.o drivers/leds/led-core.o drivers/leds/led-class.o drivers/leds/led-triggers.o drivers/leds/leds-gpio-register.o drivers/leds/leds-gpio.o drivers/leds/leds-lp55xx-common.o drivers/leds/leds-lp5523.o drivers/leds/trigger/built-in.o 

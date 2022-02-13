@@ -1,1 +1,0 @@
-cmd_net/sunrpc/auth_gss/built-in.o :=  /home/aosp/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL    -r -o net/sunrpc/auth_gss/built-in.o net/sunrpc/auth_gss/auth_rpcgss.o net/sunrpc/auth_gss/rpcsec_gss_krb5.o 

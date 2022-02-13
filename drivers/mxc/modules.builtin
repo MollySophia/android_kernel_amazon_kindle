@@ -1,3 +1,0 @@
-kernel/drivers/mxc/asrc/mxc_asrc.ko
-kernel/drivers/mxc/gpu-viv/galcore.ko
-kernel/drivers/mxc/mipi/mxc_mipi_csi2.ko

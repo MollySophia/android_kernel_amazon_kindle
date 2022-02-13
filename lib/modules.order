@@ -1,4 +1,0 @@
-kernel/lib/crc-ccitt.ko
-kernel/lib/crc-itu-t.ko
-kernel/lib/crc7.ko
-kernel/lib/libcrc32c.ko

@@ -1,1 +1,0 @@
-cmd_lib/libcrc32c.ko := /home/molly/kt3_ll_511_210/ll_511_210_build/prebuilts/gcc/linux-x86/arm/arm-eabi-4.6/bin/arm-eabi-ld -EL -r  -T /home/molly/kt3_ll_511_210/ll_511_210_build/kernel_imx/scripts/module-common.lds --build-id  -o lib/libcrc32c.ko lib/libcrc32c.o lib/libcrc32c.mod.o
