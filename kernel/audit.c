@@ -381,6 +381,13 @@ static void audit_printk_skb(struct sk_buff *skb)
 	audit_hold_skb(skb);
 }
 
+void audit_get_msg_data(struct audit_buffer *ab, char *buf, int size)
+{
+	struct nlmsghdr *nlh = nlmsg_hdr(ab->skb);
+	char *data = nlmsg_data(nlh);
+	snprintf(buf, size, "%s", data);
+}
+
 static void kauditd_send_skb(struct sk_buff *skb)
 {
 	int err;

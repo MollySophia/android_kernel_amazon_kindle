@@ -37,7 +37,7 @@
 #include <linux/lab126_hall.h>
 #include <linux/sysctl.h>
 #include <linux/sched.h>
-#include <linux/miscdevice.h>
+#include <linux/input.h>
 #include <linux/pm.h>
 #include <linux/proc_fs.h>
 #include <linux/delay.h>
@@ -46,137 +46,80 @@
 #include <asm/uaccess.h>
 #include <asm/mach-types.h>
 
+#define HALL_DRIVER_NAME    "hall_sensor"
 
-
-#define HALL_DEV_MINOR      163
-#define HALL_DRIVER_NAME    "heisenberg_hall"
-
-#define HALL_INIT_DELAY	    1000
 #define HALL_EVENT_DELAY    3000
-#define HALL_EVENT_DEB      250
-/* Hall Sensor States */
-#define STATE_OPENED        0
-#define STATE_CLOSED        1
+#define HALL_EVENT_DEB      3
+#define HALL_BUTTON_PRESS_DELAY_MS 20
 
 #define HALL_CTRL_DISABLE   0
 #define HALL_CTRL_ENABLE    1
 
+/* Hall Sensor States */
+typedef enum _hall_state {
+	HALL_OPEN = 0,
+	HALL_CLOSE
+} hall_state_t;
+
+
+struct hall_sysfs {
+	unsigned int hall_timeout;
+	unsigned int hall_dbg;
+//	unsigned int hall_pullup_enabled;
+	unsigned int hall_enabled;
+	unsigned int hall_test_trigger;
+};
+
 struct hall_drvdata {
 	struct hall_platform_data* pdata;
-	int (*enable)(struct device *dev);
-	void (*disable)(struct device *dev);
+	struct input_dev *input;
+	struct work_struct hall_detwq;
+	struct delayed_work hall_delayed_work;
+	struct mutex hall_lock;
+	hall_state_t hall_state;
+	hall_state_t hall_event;
+	struct hall_sysfs sysfs;
+	unsigned int irq;
 };
 
 
-extern int heisenberg_pwrkey_ctrl(int); 
-
-static int hall_dbg = 0;
-static int is_hall_wkup = 0;		/* set when last wakeup due to hall event (cover open) */
-static int hall_event = 0;			/* track hall events (open / close) */
-static int hall_pullup_enabled = 0;	/* default=0 to be enabled only for VNI tests */
-static int hall_close_delay = 0;	/* delay to avoid multiple transitions within short duration */
-static int current_state = 0;		/* OPEN=0, CLOSE=1 */
-static int hall_enabled = HALL_CTRL_ENABLE;	/* Enable Hall control by default */
-static int hall_irq = -1;
 static int g_gpio_hall = -1;
 
-static void hall_close_event_work_handler(struct work_struct *);
-static DECLARE_DELAYED_WORK(hall_close_event_work, hall_close_event_work_handler);
 
-static void hall_open_event_work_handler(struct work_struct *);
-static DECLARE_DELAYED_WORK(hall_open_event_work, hall_open_event_work_handler);
+static void hall_delayed_work_handler(struct work_struct *);
 
-static void hall_init_work_handler(struct work_struct *);
-static DECLARE_DELAYED_WORK(hall_init_work, hall_init_work_handler);
-
-extern int pb_oneshot;
-extern void pb_oneshot_unblock_button_events (void);
 /*
  * hall sensor gpio value hi is not detected, lo is detected
  */
 int gpio_hallsensor_detect(void)
-{	
-	return !gpio_get_value(g_gpio_hall);
-}
-static void hall_init_state(void)
 {
-	if(hall_enabled) {						/* HALL CTRL ENABLED */
-		if(gpio_hallsensor_detect()) {
-			heisenberg_pwrkey_ctrl(0);	
-			current_state = STATE_CLOSED;	/* COVER CLOSE */
-		} else {
-			heisenberg_pwrkey_ctrl(1);	
-			current_state = STATE_OPENED;	/* COVER OPEN */
-		}
-	} else {								/* HALL CTRL DISABLED */
-		heisenberg_pwrkey_ctrl(1);
+	if (g_gpio_hall > 0) {
+		return !gpio_get_value(g_gpio_hall);
+	}
+
+	return 0;
+}
+
+EXPORT_SYMBOL(gpio_hallsensor_detect);
+
+static void hall_sensor_ctrl(int closed)
+{
+	if (g_gpio_hall > 0) {
+		gpio_set_value(g_gpio_hall, closed);
 	}
 	return;
 }
 
-
-int gpio_hallsensor_irq(void)
-{
-	return hall_irq;
-}
+#if 0
 void gpio_hallsensor_pullup(int enable)
 {
-#if 0
 	if (enable > 0) {
 		mxc_iomux_v3_setup_pad(MX6SL_HALL_SNS(PU));
 	} else {
 		mxc_iomux_v3_setup_pad(MX6SL_HALL_SNS(PD));
 	}
-#endif
 }
 
-
-static long hall_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	int __user *argp = (int __user *)arg;
-	int ret = -EINVAL;
-	int state = 0;
-
-	switch (cmd) {
-		case HALL_IOCTL_GET_STATE:
-			state = gpio_hallsensor_detect();
-			if (put_user(state, argp))
-				return -EFAULT;
-			else
-				ret = 0;
-			break;
-		default:
-			break;
-	}
-	return ret;
-}
-
-static ssize_t hall_misc_write(struct file *file, const char __user *buf,
-								size_t count, loff_t *pos)
-{
-	return 0;
-}
-
-static ssize_t hall_misc_read(struct file *file, char __user *buf,
-								size_t count, loff_t *pos)
-{
-	return 0;
-}
-
-static const struct file_operations hall_misc_fops =
-{
-	.owner = THIS_MODULE,
-	.read  = hall_misc_read,
-	.write = hall_misc_write,
-	.unlocked_ioctl = hall_ioctl,
-};
-
-static struct miscdevice hall_misc_device =
-{
-	.minor = HALL_DEV_MINOR,
-	.name  = HALL_MISC_DEV_NAME,
-	.fops  = &hall_misc_fops,
-};
 
 static ssize_t hall_gpio_pullup_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
 {
@@ -196,31 +139,32 @@ static ssize_t hall_gpio_pullup_show(struct sys_device *dev, struct sysdev_attri
 }
 
 static DEVICE_ATTR(hall_gpio_pullup, 0644, hall_gpio_pullup_show, hall_gpio_pullup_store);
+#endif
 
-static ssize_t hall_trig_wkup_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+static ssize_t hall_debug_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
 {
-	return sprintf(buf, "%d\n", is_hall_wkup);
-}
-static DEVICE_ATTR(hall_trig_wkup, 0444, hall_trig_wkup_show, NULL);
-
-static ssize_t hall_debug_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
-{
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
 	int value = 0;
 	if (sscanf(buf, "%d", &value) <= 0) {
 		printk(KERN_ERR "Could not update hall debug ctrl \n");
 		return -EINVAL;
 	}
-	hall_dbg = (value > 0) ? 1 : 0;
+	sysfs->hall_dbg = (value > 0) ? 1 : 0;
 	return size;
 }
 
-static ssize_t hall_debug_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+static ssize_t hall_debug_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", hall_dbg);
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
+	return sprintf(buf, "%d\n", sysfs->hall_dbg);
 }
 static DEVICE_ATTR(hall_debug, 0644, hall_debug_show, hall_debug_store);
 
-static ssize_t hall_detect_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+static ssize_t hall_detect_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	return sprintf(buf, "%d\n", gpio_hallsensor_detect());
 }
@@ -228,313 +172,452 @@ static DEVICE_ATTR(hall_detect, 0444, hall_detect_show, NULL);
 
 
 
-static ssize_t hall_enable_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+static ssize_t hall_enable_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
 {
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
 	int value = 0;
 	if (sscanf(buf, "%d", &value) <= 0) {
 		printk(KERN_ERR "Could not update hall enable ctrl \n");
 		return -EINVAL;
 	}
 
-	if (value > 0 && !hall_enabled) {
-		hall_enabled = HALL_CTRL_ENABLE;
-	} else if(value <= 0 && hall_enabled) {
-		hall_enabled = HALL_CTRL_DISABLE;
+	if (value > 0 && !sysfs->hall_enabled) {
+		sysfs->hall_enabled = HALL_CTRL_ENABLE;
+	} else if(value <= 0 && sysfs->hall_enabled) {
+		sysfs->hall_enabled = HALL_CTRL_DISABLE;
 	}
-	hall_init_state();
 	return size;
 }
-static ssize_t hall_enable_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+static ssize_t hall_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", hall_enabled);
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
+	return sprintf(buf, "%d\n", sysfs->hall_enabled);
 }
 static DEVICE_ATTR(hall_enable, 0644, hall_enable_show, hall_enable_store);
 
-static void hall_send_close_event(void) 
+
+static ssize_t hall_timeout_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	char *envp[] = {"HALLSENSOR=closed", NULL};
-	kobject_uevent_env(&hall_misc_device.this_device->kobj, KOBJ_ONLINE, envp);	
-	current_state = STATE_CLOSED;
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
+	return sprintf(buf, "%d secs\n", sysfs->hall_timeout);
 }
 
-static void hall_close_event_work_handler(struct work_struct *work)
+
+static ssize_t hall_timeout_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
 {
-	if(hall_enabled) {
-		if(gpio_hallsensor_detect() && current_state == STATE_OPENED) {
-			heisenberg_pwrkey_ctrl(0);	
-			hall_send_close_event();
-			if (hall_dbg) 
-				printk(KERN_INFO "KERNEL: I hall:closed::current_state=%d\n",current_state);
-		} 
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	int value = 0;
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Could not update hall timeout  ctrl \n");
+		return -EINVAL;
 	}
+
+	drv->sysfs.hall_timeout = value;
+	return size;
 }
 
-static void hall_open_event_work_handler(struct work_struct *work)
+static DEVICE_ATTR(hall_timeout, 0644, hall_timeout_show, hall_timeout_store);
+
+
+static ssize_t hall_test_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	if(!gpio_hallsensor_detect()) {
-		/* hall in open state beyond the timeout so no need for delay */
-		hall_close_delay = 0;
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
+	return sprintf(buf, "Triggered %s\n", (sysfs->hall_test_trigger ? "Close" : "Open"));
+}
+
+
+static ssize_t hall_test_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	int value = 0;
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Could not update hall timeout  ctrl \n");
+		return -EINVAL;
 	}
+
+	drv->sysfs.hall_test_trigger = value;
+	hall_sensor_ctrl(value);
+	return size;
 }
 
-static void hall_detwq_handler(struct work_struct *dummy)
-{
-	int irq = gpio_hallsensor_irq();
+static DEVICE_ATTR(hall_test_trigger, 0644, hall_test_show, hall_test_store);
 
-	if(hall_enabled) {
-		if(gpio_hallsensor_detect()) {
-			/* Hall - Close */
-			cancel_delayed_work_sync(&hall_open_event_work);
-			if (hall_close_delay) {
-				/*	Note: To avoid framework overload during back-to-back cover open-close events
-				 *	defer current close event when previous open event occured immiediately after close  
-				 */
-				schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
-			} else { 
-				/* Hall debounce on a normal (cover close) scenario */
-				schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DEB));
-			}
-			if (hall_dbg) 
-				printk(KERN_INFO "KERNEL: I hall:close event::current_state=%d\n",current_state);
-		} else {
-			/* Hall - Open */
-			char *envp[] = {"HALLSENSOR=opened", NULL};
-			if (hall_dbg) 
-				printk(KERN_INFO "KERNEL: I hall:open event::current_state=%d\n",current_state);
-			cancel_delayed_work_sync(&hall_close_event_work);
-			if (current_state != STATE_OPENED) {
-				kobject_uevent_env(&hall_misc_device.this_device->kobj, KOBJ_OFFLINE, envp);
-				current_state = STATE_OPENED;
-				heisenberg_pwrkey_ctrl(1);
-				if (hall_dbg) 
-					printk(KERN_INFO "KERNEL: I hall:opened::current_state=%d\n",current_state);
-			}
-			hall_close_delay = 1;
-			schedule_delayed_work(&hall_open_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
+
+
+static int hall_sysfs_create(struct platform_device *pdev)
+{
+	int ret = 0;
+	struct hall_drvdata *drv = platform_get_drvdata(pdev);
+	struct hall_sysfs *sysfs = &drv->sysfs;
+
+	sysfs->hall_enabled = HALL_CTRL_ENABLE;
+	sysfs->hall_timeout = HALL_EVENT_DEB;
+	sysfs->hall_dbg = 0;
+
+        if (device_create_file(&pdev->dev, &dev_attr_hall_detect))
+	{
+                dev_err(&pdev->dev, "Unable to create file: hall_detect\n");
+		ret = -EFAULT;
+		goto err_detect;
+	}
+
+        if (device_create_file(&pdev->dev, &dev_attr_hall_enable))
+	{
+                dev_err(&pdev->dev, "Unable to create file: hall_enable\n");
+		ret= -EFAULT;
+		goto err_enable;
+	}
+
+        if (device_create_file(&pdev->dev, &dev_attr_hall_debug))
+	{
+                dev_err(&pdev->dev, "Unable to create file: hall_debug\n");
+		ret = -EFAULT;
+		goto err_debug;
+	}
+
+        if (device_create_file(&pdev->dev, &dev_attr_hall_timeout))
+	{
+                dev_err(&pdev->dev, "Unable to create file: hall_timeout\n");
+		ret = -EFAULT;
+		goto err_timeout;
+	}
+
+        if (device_create_file(&pdev->dev, &dev_attr_hall_test_trigger))
+	{
+                dev_err(&pdev->dev, "Unable to create file: hall_test_trigger\n");
+		ret = -EFAULT;
+		goto err_trigger;
+	}
+
+	return ret;
+err_trigger:
+	device_remove_file(&pdev->dev, &dev_attr_hall_timeout);
+err_timeout:	
+	device_remove_file(&pdev->dev, &dev_attr_hall_debug);
+err_debug:
+	device_remove_file(&pdev->dev, &dev_attr_hall_enable);
+err_enable:
+	device_remove_file(&pdev->dev, &dev_attr_hall_detect);
+err_detect:
+	return ret;
+
+}
+
+static void hall_sysfs_destroy(struct platform_device *pdev)
+{
+
+	device_remove_file(&pdev->dev, &dev_attr_hall_detect);
+	device_remove_file(&pdev->dev, &dev_attr_hall_timeout);
+	device_remove_file(&pdev->dev, &dev_attr_hall_debug);
+	device_remove_file(&pdev->dev, &dev_attr_hall_enable);
+	return;
+}
+
+static void send_input_event(struct hall_drvdata *drv)
+{
+
+	input_report_switch(drv->input, SW_LID,  drv->hall_state);
+	input_sync(drv->input);
+	return;
+
+}
+
+
+static void hall_detwq_handler(struct work_struct *work)
+{
+	struct hall_drvdata *drv = container_of(work, struct hall_drvdata, hall_detwq);
+	struct input_dev *input = drv->input;
+	int irq = drv->irq;
+	struct hall_sysfs *sysfs = &drv->sysfs;
+
+	mutex_lock(&drv->hall_lock);
+
+	if (sysfs->hall_enabled) {
+		drv->hall_event = gpio_hallsensor_detect();
+		printk("HALL_DEBUG: Sensor event : %d hall state %d\n", drv->hall_event, drv->hall_state);
+
+		if ((drv->hall_state == HALL_CLOSE) && (drv->hall_event == HALL_OPEN)) {
+			printk("HALL_DEBUG: Sending Event %d\n", drv->hall_event);
+			cancel_delayed_work_sync(&drv->hall_delayed_work);
+			drv->hall_state = HALL_OPEN;
+			send_input_event(drv);
+			goto done;
+		}	
+
+		if ((drv->hall_state == HALL_OPEN) && (drv->hall_event == HALL_CLOSE)) {
+			printk("HALL_DEBUG: Scheduling Event %d\n", drv->hall_event);
+			cancel_delayed_work_sync(&drv->hall_delayed_work);
+			schedule_delayed_work(&drv->hall_delayed_work, msecs_to_jiffies(HALL_EVENT_DELAY));
 		}
 	}
-	hall_event = 1;	
+done:
 	enable_irq(irq);
+	mutex_unlock(&drv->hall_lock);
+	return;
 }
-
-static DECLARE_WORK(hall_detwq, hall_detwq_handler); 
 
 static irqreturn_t hall_isr(int irq, void *dev_id)
 {
+	struct hall_drvdata *drv = (struct hall_drvdata *)dev_id;
 	disable_irq_nosync(irq);
-	schedule_work(&hall_detwq);
+	schedule_work(&drv->hall_detwq);
 
 	return IRQ_HANDLED;
 }
 
-/* Init Hall state during boot 
+/* Init Hall state during boot
  * to avoid out of sync issue may due to bcut / wdog / HR
  */
-static void hall_init_work_handler(struct work_struct *work)
+static void hall_delayed_work_handler(struct work_struct *work)
 {
-	int irq = gpio_hallsensor_irq();
-	hall_init_state();
-	enable_irq_wake(irq);
+	struct hall_drvdata *drv = container_of(work, struct hall_drvdata, hall_delayed_work);
+	struct input_dev *input = drv->input;
+	struct hall_sysfs *sysfs = &drv->sysfs;
+	unsigned int timeout = sysfs->hall_timeout;
+	
+	//if (gpio_hallsensor_detect() == drv->hall_event) {
+	if (gpio_hallsensor_detect() == HALL_CLOSE) {
+		printk("HALL_DEBUG: Sensor event after wait : %d hall state %d\n", drv->hall_event, drv->hall_state);
+		mutex_lock(&drv->hall_lock);
+		drv->hall_state = HALL_CLOSE;
+		send_input_event(drv);
+		timeout *= 1000;  //secs to msecs
+		//JIRA 2458/2461
+		msleep(timeout);
+		mutex_unlock(&drv->hall_lock);
+	}
+
+	return;
 }
+
+#ifdef CONFIG_PROC_FS
+#define HALL_PROC_FILE "driver/hall_sensor"
+static int hall_show(struct seq_file *m, void *v)
+{
+        struct hall_drvdata *priv = m->private;
+
+	mutex_lock(&priv->hall_lock);
+        seq_printf(m, "0x%x\n", !gpio_hallsensor_detect());
+	mutex_unlock(&priv->hall_lock);
+        return 0;
+}
+
+static int hall_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, hall_show, PDE_DATA(inode));
+}
+
+static const struct file_operations proc_fops = {
+        .owner = THIS_MODULE,
+        .open = hall_open,
+        .read = seq_read,
+        .llseek = seq_lseek,
+        .release = single_release,
+};
+
+static void create_hall_proc_file(struct hall_drvdata *priv)
+{
+        struct proc_dir_entry *entry;
+        entry = proc_create_data(HALL_PROC_FILE, 0644, NULL, &proc_fops, priv);
+        if (!entry)
+                pr_err("%s: Error creating %s\n", __func__, HALL_PROC_FILE);
+}
+
+static void remove_hall_proc_file(void)
+{
+        remove_proc_entry(HALL_PROC_FILE, NULL);
+}
+#endif
+
 
 static int heisenberg_hall_probe(struct platform_device *pdev)
 {
-	int error;
 	int irq;
-	int ret;
+	int ret = 0;
 	struct device_node *np;
-
 	struct hall_drvdata* ddata;
 	struct hall_platform_data *pdata = pdev->dev.platform_data;
+	struct input_dev *input;
+
+	printk(KERN_ERR "HALL_SENSOR: Probe is called %s:%d\n", __FUNCTION__, __LINE__);
 
 	ddata = kzalloc(sizeof(struct hall_drvdata) + sizeof(struct hall_drvdata),GFP_KERNEL);
 	if (!ddata) {
 		printk(KERN_INFO "ddata error\n");
-		error = -ENOMEM;
-		goto fail1;
+		ret = -ENOMEM;
+		goto err;
 	}
 	platform_set_drvdata(pdev, ddata);
 	ddata->pdata = pdata;
-
-	if (misc_register(&hall_misc_device)) {
-		error = -EBUSY;
-		printk(KERN_ERR "%s Couldn't register device %d \n",__FUNCTION__, HALL_DEV_MINOR);
-		return -EFAULT;
-	}
+	
+	INIT_WORK(&ddata->hall_detwq, hall_detwq_handler);
+	INIT_DELAYED_WORK(&ddata->hall_delayed_work, hall_delayed_work_handler);
+	mutex_init(&ddata->hall_lock);
 
 	np = of_find_compatible_node(NULL, NULL, "amzn,heisenberg_hall");
 	if (!np) {
-		pr_err("%s: invalid pnode\n", __func__);
-		return -EINVAL;
+		printk("%s: invalid pnode\n", __func__);
+		ret = -EINVAL;
+		goto err_free_ddata;
 	}
+	printk(KERN_ERR "HALL_SENSOR: Probe is called %s:%d\n", __FUNCTION__, __LINE__);
 
 	ret = of_get_named_gpio(np, "hall_int_n", 0);
 	if (ret < 0) {
-		pr_err("%s: get wl_host_wake GPIO failed err=%d\n", __func__, ret);
-		return ret;
+		printk("%s: get wl_host_wake GPIO failed err=%d\n", __func__, ret);
+		ret = -EINVAL;
+		goto err_free_ddata;
 	}
 
 	g_gpio_hall = ret;
 
 	ret = gpio_request(g_gpio_hall, "hall_irq");
 	if (ret) {
-		pr_err("%s: failed to request gpio %d for hall err=%d\n", __func__, g_gpio_hall, ret);
-		return ret;
+		printk("%s: failed to request gpio %d for hall err=%d\n", __func__, g_gpio_hall, ret);
+		ret = -EINVAL;
+		goto err_free_ddata;
 	}
 
 	ret = gpio_direction_input(g_gpio_hall);
 	if (ret) {
-		pr_err("%s: configuration failure err=%d\n", __func__, ret);
-		gpio_free(g_gpio_hall);
-		return ret;
+		printk("%s: configuration failure err=%d\n", __func__, ret);
+		ret = -EINVAL;
+		goto err_free_gpio;
 	}
 
 	/* Out Of Band interrupt */
 	irq = gpio_to_irq(g_gpio_hall);
 	if (irq < 0) {
-		pr_err("%s: irq failure\n", __func__);
-		gpio_free(g_gpio_hall);
-		return -EINVAL;
+		printk("%s: irq failure\n", __func__);
+		ret = -EINVAL;
+		goto err_free_gpio;
 	}
 
-	hall_irq = irq;
+	ddata->irq = irq;
 
-	error = request_irq(irq, hall_isr, (IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_EARLY_RESUME),HALL_DRIVER_NAME, pdata);
-	if (error) {
-		printk(KERN_ERR "%s Failed to claim irq %d, error %d \n",__FUNCTION__, irq, error);
-		return -EFAULT;
-	} 
+	ret = request_irq(irq, hall_isr, (IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_EARLY_RESUME),HALL_DRIVER_NAME, ddata);
+	if (ret) {
+		printk(KERN_ERR "%s Failed to claim irq %d, error %d \n",__FUNCTION__, irq, ret);
+		ret = -EFAULT;
+		goto err_free_gpio;
+	}
+
+
+	input = input_allocate_device();
+	if (!input) {
+		dev_err(&pdev->dev, "Failed to allocate input device\n");
+		ret = -ENOMEM;
+		goto err_free_irq;
+	}
+
+	input->name = pdev->name;
+	input->dev.parent = &pdev->dev;
+	set_bit(EV_SW, input->evbit);
+	set_bit(SW_LID, input->swbit);
+	ret = input_register_device(input);
+
+	if (ret) {
+		dev_err(&pdev->dev, "Failed to register input dev, err=%d\n", ret);
+		printk("Failed to register input dev, err=%d\n", ret);
+		ret = -EFAULT;
+		goto err_free_input;
+	}
+
+	ddata->input = input;
 
 	/* Configure wakeup capable */
 	device_set_wakeup_capable(&pdev->dev, true);
 
-        if (device_create_file(&pdev->dev, &dev_attr_hall_detect))
-	{
+	if (hall_sysfs_create(pdev) < 0) {
                 dev_err(&pdev->dev, "Unable to create file: hall_detect\n");
-		return -EFAULT;
-	}
-        if (device_create_file(&pdev->dev, &dev_attr_hall_gpio_pullup))
-	{
-                dev_err(&pdev->dev, "Unable to create file: hall_gpio_pullup\n");
-		return -EFAULT;
-	}
-        if (device_create_file(&pdev->dev, &dev_attr_hall_debug))
-	{
-                dev_err(&pdev->dev, "Unable to create file: hall_debug\n");
-		return -EFAULT;
+		ret = -EFAULT;
+		goto err_dereg_input;
 	}
 
-        if (device_create_file(&pdev->dev, &dev_attr_hall_trig_wkup))
-	{
-                dev_err(&pdev->dev, "Unable to create file: hall_trig_wkup\n");
-		return -EFAULT;
+
+#ifdef CONFIG_PROC_FS
+        create_hall_proc_file(ddata);
+#endif
+	// If cover closed send an event after 3 sec to let apps to be up, else don't bother.	
+	if (gpio_hallsensor_detect() == HALL_CLOSE) {
+		schedule_delayed_work(&ddata->hall_delayed_work, msecs_to_jiffies(HALL_EVENT_DELAY));
 	}
-
-	schedule_delayed_work(&hall_init_work, msecs_to_jiffies(HALL_INIT_DELAY));
-
 	return 0;
 
-fail3:
-	misc_deregister(&hall_misc_device);
-fail2:
+err_dereg_input:
+	device_set_wakeup_capable(&pdev->dev, false);
+	input_unregister_device(input);
+err_free_input:
+	input_free_device(input);
+err_free_irq:
+	disable_irq_wake(pdata->hall_irq);
+	free_irq(pdata->hall_irq, pdev->dev.platform_data);
+err_free_gpio:
+	gpio_free(g_gpio_hall);
+err_free_ddata:
 	platform_set_drvdata(pdev, NULL);
 	kfree(ddata);
-fail1:
-	return error;
+err:
+	return ret;
 }
 
 static int heisenberg_hall_remove(struct platform_device *pdev)
 {
 	struct hall_platform_data *pdata = pdev->dev.platform_data;
+	struct hall_drvdata *priv = platform_get_drvdata(pdev);
 
-	device_remove_file(&pdev->dev, &dev_attr_hall_detect);
-	device_remove_file(&pdev->dev, &dev_attr_hall_gpio_pullup);
-	device_remove_file(&pdev->dev, &dev_attr_hall_debug);
-	device_remove_file(&pdev->dev, &dev_attr_hall_trig_wkup);
+	hall_sysfs_destroy(pdev);
 
-	cancel_delayed_work_sync(&hall_init_work);		
-	cancel_delayed_work_sync(&hall_open_event_work);		
-	cancel_delayed_work_sync(&hall_close_event_work);		
+//	device_remove_file(&pdev->dev, &dev_attr_hall_trig_wkup);
+#ifdef CONFIG_PROC_FS
+	remove_hall_proc_file();
+#endif
+	cancel_delayed_work_sync(&priv->hall_delayed_work);
+	cancel_work_sync(&priv->hall_detwq);
 
-	misc_deregister(&hall_misc_device);
-	device_set_wakeup_capable(&pdev->dev, false); 
+	input_unregister_device(priv->input);
+	input_free_device(priv->input);
+	device_set_wakeup_capable(&pdev->dev, false);
 	disable_irq_wake(pdata->hall_irq);
-	free_irq(pdata->hall_irq, pdev->dev.platform_data);	
+	free_irq(pdata->hall_irq, pdev->dev.platform_data);
 	platform_set_drvdata(pdev, NULL);
 	return 0;
 }
 
-static int heisenberg_hall_suspend(struct platform_device *pdev, pm_message_t state)
-{
-	is_hall_wkup = 0;
-	hall_event = 0;
-	return 0;
-}
-
-static int heisenberg_hall_resume(struct platform_device *pdev)
-{
-#if 0
-	if (hall_event) {
-		if (hall_dbg)
-			printk(KERN_INFO "%s oneshot: %d\n", __func__, pb_oneshot);
-		if (pb_oneshot == HIBER_SUSP) {
-			pb_oneshot = HALL_IRQ;
-			pb_oneshot_unblock_button_events();
-		}
-
-		is_hall_wkup = 1;
-		hall_event = 0;
-		if (hall_dbg) 
-			printk(KERN_INFO "KERNEL: I hall:wakeup event::current_state=%d\n",current_state);
-	} 
-#endif
-	return 0;
-}
-
-
-static void hall_nop_release(struct device* dev)
-{
-	/* Do Nothing */
-}
-
 static const struct of_device_id hall_of_match[] = {
-        { .compatible = "heisenberg_hall", },
+        { .compatible = "amzn,heisenberg_hall", },
         {},
-};
-
-static struct platform_device heisenberg_hall_device =
-{
-	.name = HALL_DRIVER_NAME,
-	.id   = 0,
-	.dev  = {
-		.release = hall_nop_release,
-  	},
 };
 
 static struct platform_driver heisenberg_hall_driver = {
 	.driver		= {
 		.name	= HALL_DRIVER_NAME,
-		.owner	= THIS_MODULE,		 
+		.owner	= THIS_MODULE,
                 .of_match_table = of_match_ptr(hall_of_match),
 
 	},
 	.probe		= heisenberg_hall_probe,
 	.remove		= heisenberg_hall_remove,
-	.suspend 	= heisenberg_hall_suspend,
-	.resume 	= heisenberg_hall_resume,
 };
 
 static int __init heisenberg_hall_init(void)
 {
-	printk(KERN_INFO "Registering Heisenberg hall sensor platform device\n");
-	platform_device_register(&heisenberg_hall_device);
 	platform_driver_register(&heisenberg_hall_driver);
 	return 0;
 }
 
 static void __exit heisenberg_hall_exit(void)
-{	
-	platform_driver_unregister(&heisenberg_hall_device);
+{
 	platform_driver_unregister(&heisenberg_hall_driver);
 }
 

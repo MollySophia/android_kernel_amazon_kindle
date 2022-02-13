@@ -27,13 +27,6 @@
  * @ingroup PMIC_CORE
  */
 
-static struct atomic_notifier_head pmic_power_button_notifier_chain;
-static struct atomic_notifier_head pmic_battery_notifier_chain;
-static struct atomic_notifier_head pmic_charging_notifier_chain;
-static struct atomic_notifier_head pmic_temp_notifier_chain;
-static struct atomic_notifier_head pmic_fg_notifier_chain;
-static struct atomic_notifier_head pmic_batmon_notifier_chain;
-
 /* power */
 int register_pmic_power_button_notifier(struct notifier_block *nb);
 int unregister_pmic_power_button_notifier(struct notifier_block *nb);

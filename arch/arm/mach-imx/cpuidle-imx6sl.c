@@ -65,7 +65,7 @@ static int imx6sl_enter_wait(struct cpuidle_device *dev,
 		 * Also float DDR IO pads.
 		 */
 		ttbr1 = save_ttbr1();
-		imx6sl_wfi_in_iram_fn(wfi_iram_base, regulator_is_enabled(vbus_ldo),
+		imx6sl_wfi_in_iram_fn(wfi_iram_base, ldo2p5_dummy_enable,
 					audio_bus_freq_mode);
 		restore_ttbr1(ttbr1);
 	} else {

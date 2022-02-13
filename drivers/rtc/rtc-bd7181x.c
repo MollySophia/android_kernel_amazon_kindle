@@ -23,6 +23,14 @@
 #include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/mfd/bd7181x.h>
+#include <linux/wakeup_reason.h>
+
+#if defined(CONFIG_AMAZON_METRICS_LOG)
+#define BD7181x_METRIC_BUFFER_SIZE  128
+#include <linux/metricslog.h>
+char bd7181x_rtc_metric_buf[BD7181x_METRIC_BUFFER_SIZE];
+#endif
+extern int bd7181x_get_battery_mah(void);
 
 /** @brief bd7181x rtc struct */
 struct bd7181x_rtc {
@@ -30,6 +38,8 @@ struct bd7181x_rtc {
 	int irq;				/**< rtc irq */
 };
 
+unsigned long suspend_time, wakeup_time, total_suspend_time, total_wake_time, up_time;
+int suspend_mah, wakeup_mah;
 /* @brief Total number of RTC registers needed to set time*/
 // #define NUM_TIME_REGS	(BD7181X_REG_YEAR - BD7181X_REG_SEC + 1)
 
@@ -137,7 +147,6 @@ static int bd7181x_rtc_set_time(struct device *dev, struct rtc_time *tm)
 		return ret;
 	}
 	printk(KERN_INFO "%s, rtc time set to SS:MM:HH:DD:MM:YY 0x%x:0x%x:0x%x:0x%x:0x%x:0x%x\n",__func__, rtc_data->sec, rtc_data->min, rtc_data->hour, rtc_data->day, rtc_data->month, rtc_data->year);
-
 	return ret;
 }
 
@@ -274,6 +283,17 @@ static int bd7181x_rtc_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
+	irq  = platform_get_irq(pdev, 0);
+	if (irq <= 0) {
+		dev_warn(&pdev->dev, "Wake up is not possible as irq = %d\n", irq);
+		return -ENXIO;
+	}
+
+	if (rtc_reg & 0x7) {
+		printk(KERN_INFO "Power On by RTC[INT_STAT_12 0x%x].\n", rtc_reg);
+		log_wakeup_reason(irq);
+	}
+
 	ret = regmap_write(bd7181x->regmap, BD7181X_REG_INT_STAT_12, rtc_reg);
 	if (ret < 0)
 		return ret;
@@ -291,11 +311,7 @@ static int bd7181x_rtc_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	irq  = platform_get_irq(pdev, 0);
-	if (irq <= 0) {
-		dev_warn(&pdev->dev, "Wake up is not possible as irq = %d\n", irq);
-		return -ENXIO;
-	}
+	
 
 	ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 		bd7181x_rtc_interrupt, IRQF_TRIGGER_LOW | IRQF_EARLY_RESUME,
@@ -305,7 +321,7 @@ static int bd7181x_rtc_probe(struct platform_device *pdev)
 		return ret;
 	}
 	bd_rtc->irq = irq;
-	device_set_wakeup_capable(&pdev->dev, 1);
+	device_init_wakeup(&pdev->dev, 1);
 
 	bd_rtc->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
 		&bd7181x_rtc_ops, THIS_MODULE);
@@ -316,6 +332,17 @@ static int bd7181x_rtc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, bd_rtc);
+
+	{
+		struct rtc_time tm;
+
+	        if(!bd7181x_rtc_read_time(&pdev->dev, &tm))
+			printk(KERN_INFO "bd7181x-rtc probe time: %d:%d:%d-%d:%d:%d:\n", tm.tm_year, tm.tm_mon, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+	        else
+			printk(KERN_INFO "bd7181x-rtc probe read rtc time failed\n");
+
+	        rtc_tm_to_time(&tm, &wakeup_time);
+	}
 
 	return 0;
 }
@@ -354,6 +381,22 @@ static void bd7181x_rtc_shutdown(struct platform_device *pdev)
 static int bd7181x_rtc_suspend(struct device *dev)
 {
 	struct bd7181x_rtc *bd_rtc = dev_get_drvdata(dev);
+	struct rtc_time tm;
+
+	if(!bd7181x_rtc_read_time(dev, &tm))
+	{
+		suspend_mah = bd7181x_get_battery_mah();
+
+		rtc_tm_to_time(&tm, &suspend_time);
+		if(suspend_time > wakeup_time && wakeup_time !=0)
+		{
+			total_wake_time += suspend_time-wakeup_time;
+			printk(KERN_INFO "total wake time is: %d \n", total_wake_time);
+		}
+	}
+	else
+		printk(KERN_ERR "rtc suspend read rtc time failed\n");
+
 
 	if (device_may_wakeup(dev))
 		enable_irq_wake(bd_rtc->irq);
@@ -367,11 +410,49 @@ static int bd7181x_rtc_suspend(struct device *dev)
 static int bd7181x_rtc_resume(struct device *dev)
 {
 	struct bd7181x_rtc *bd_rtc = dev_get_drvdata(dev);
+	struct rtc_time tm;
+
+	if(!bd7181x_rtc_read_time(dev, &tm))
+	{
+		rtc_tm_to_time(&tm, &wakeup_time);
+		if(wakeup_time > suspend_time && suspend_time !=0)
+		{
+			total_suspend_time += wakeup_time - suspend_time;
+			printk(KERN_INFO "FRED total suspend time is: %d \n", total_suspend_time);
+		}
+#ifdef CONFIG_AMAZON_METRICS_LOG
+		wakeup_mah = bd7181x_get_battery_mah();
+		printk(KERN_ERR "FRED suspenddelta mah=%d\n", wakeup_mah-suspend_mah);
+		memset(bd7181x_rtc_metric_buf,0,sizeof(bd7181x_rtc_metric_buf));
+                snprintf(bd7181x_rtc_metric_buf, sizeof(bd7181x_rtc_metric_buf),
+                        "kernel:pmic-bd7181x:suspenddelta=%d;CT;1,suspendtime=%d;CT;1:NR",
+                        wakeup_mah-suspend_mah, wakeup_time-suspend_time);
+
+                log_to_metrics(ANDROID_LOG_INFO, "battery", bd7181x_rtc_metric_buf);
+#endif
+	}
+	else
+		printk(KERN_ERR "FRED rtc wakeup read rtc time failed\n");
 
 	if (device_may_wakeup(dev))
 		disable_irq_wake(bd_rtc->irq);
 	return 0;
 }
+
+unsigned long bd7181x_total_suspend_time(void)
+{
+	return total_suspend_time;
+}
+EXPORT_SYMBOL(bd7181x_total_suspend_time);
+
+unsigned long bd7181x_total_wake_time(void)
+{
+	return total_wake_time;
+}
+EXPORT_SYMBOL(bd7181x_total_wake_time);
+
+
+
 #endif
 
 static SIMPLE_DEV_PM_OPS(bd7181x_rtc_pm_ops, bd7181x_rtc_suspend, bd7181x_rtc_resume);
@@ -399,6 +480,13 @@ static struct platform_driver bd7181xrtc_driver = {
 /**@brief module initialize function */
 static int __init bd7181x_rtc_init(void)
 {
+	suspend_time = 0;
+	wakeup_time = 0;
+	total_suspend_time = 0;
+	total_wake_time = 0;
+	up_time = 0;
+	suspend_mah = 0;
+	wakeup_mah = 0;
 	return platform_driver_register(&bd7181xrtc_driver);
 }
 module_init(bd7181x_rtc_init);

@@ -56,6 +56,7 @@
 #include <linux/i2c.h>
 #include "epdc_regs.h"
 #include <linux/pxp_dma.h>
+#include <linux/ftrace.h>
 
 #define DEBUG
 
@@ -65,7 +66,7 @@
  */
 /*#define DEFAULT_PANEL_HW_INIT*/
 
-#define NUM_SCREENS_MIN	2
+#define NUM_SCREENS_MIN	3
 
 #include "epdc_regs.h"
 #include <asm/cacheflush.h>
@@ -127,8 +128,11 @@
 
 #define LUT_MASK(x) (1ULL << (x))
 
+#define EPDC_ENV_LEN 50
+
 static unsigned long default_bpp = 8;
 static int display_temp_c;
+static int prev_display_temp;
 
 extern bool wfm_using_builtin;
 
@@ -479,13 +483,15 @@ struct fb_res_mem resolution_memory_map[] =
 	{ 256, 1024, 758 ,  3},
 	{ 512, 1448, 1072,  6},
 	{ 512, 800,  600,   6}, //eanab
-	{ 508, 1072, 1448,  6}, //whisky, taking 4M away reserved for working buffer A
+	{ 512, 600,  800,   6}, //eanab
+	{ 508, 1072, 1448,  6}, //abc123, taking 4M away reserved for working buffer A
 };
 
 #endif /* CONFIG_LAB126 */
 
 #define WFM_TEMP_BUF_LEN   (1024*1024*10)
 static int mxc_epdc_debugging = 0;
+static int mxc_epdc_systrace = 0;
 static int mxc_epdc_paused = 0;
 static int use_cpufreq_override = 0;
 static int use_cmap = 0;
@@ -758,6 +764,27 @@ static long long timeofday_msec(void)
 	return (long long)tv.tv_sec*1000 + tv.tv_usec/1000;
 }
 
+#define ATRACE_MESSAGE_LEN 256
+
+static inline int getpid(void)
+{
+    return current->pid;
+}
+
+#ifdef CONFIG_TRACING
+static void tracing_mark_write(char *content, bool markerstate, u32 id)
+{
+        char buf[ATRACE_MESSAGE_LEN];
+        if(markerstate) {
+		snprintf(buf, ATRACE_MESSAGE_LEN, "B|%d|%s:%d", getpid(), content, id);
+        } else {
+                buf[0] = 'E';
+                buf[1] = '\0';
+        }
+        trace_puts(buf);
+}
+#endif /* CONFIG_TRACING */
+
 /********************************************************
  * Start Low-Level EPDC Functions
  ********************************************************/
@@ -920,6 +947,14 @@ static void epdc_submit_update(u32 lut_num, u32 waveform_mode, u32 update_mode,
 	    update_mode;
 
 	__raw_writel(reg_val, EPDC_UPD_CTRL);
+
+#ifdef CONFIG_TRACING
+	/* Systrace entry for update submit */
+	if (mxc_epdc_systrace) {
+		tracing_mark_write("EPDC_update submit H/W", true, 0);
+		tracing_mark_write("",false, 0);
+	}
+#endif /* CONFIG_TRACING */
 }
 
 static void epdc_submit_paused_update(int waveform)
@@ -2638,6 +2673,7 @@ static void epdc_submit_work_func(struct work_struct *work)
 	bool is_transform;
 	u32 update_addr;
 	int ret;
+	int ref_temp = 0;
 
 	/* Protect access to buffer queues and to update HW */
 	mutex_lock(&fb_data->queue_mutex);
@@ -2859,11 +2895,24 @@ static void epdc_submit_work_func(struct work_struct *work)
 		return;
 	}
 	mdelay(1); //1ms for fiti power to become ready
-	
 	fp9928_write_vcom(fb_data->vcom_steps);
 	display_temp_c = fp9928_read_temp();
-	
 	mutex_unlock(&fb_data->power_mutex);
+
+	if (fb_data->temp_override != TEMP_USE_AUTO) {
+		ref_temp = fb_data->temp_override;
+	} else {
+		ref_temp = display_temp_c;
+	}
+
+	if (ref_temp != prev_display_temp) {
+		char env_string[EPDC_ENV_LEN];
+		char *envp[] = {env_string, NULL};
+		snprintf(env_string, sizeof(env_string), "DISPLAY_TEMPERATURE=%d", ref_temp);
+		printk(KERN_INFO "EPDC temperature changed from %d to %d [Override temp %d].\n", prev_display_temp, ref_temp, fb_data->temp_override);
+		prev_display_temp = ref_temp;
+		kobject_uevent_env(&(fb_data->dev->kobj), KOBJ_CHANGE, envp);
+	}
 	if ((fb_data->epdc_fb_var.rotate == FB_ROTATE_UR) &&
 		(fb_data->epdc_fb_var.grayscale == GRAYSCALE_8BIT) &&
 		!is_transform && !fb_data->restrict_width) {
@@ -3370,7 +3419,7 @@ static int mxc_epdc_fb_send_single_update(struct mxcfb_update_data *upd_data,
 		list_add_tail(&marker_data->full_list,
 			&fb_data->full_marker_list);
 
-
+		/* Debug logging for update start */
 		if (mxc_epdc_debugging) {
 			marker_data->start_time = timeofday_msec();
 			printk(KERN_INFO "mxc_epdc_fb: [%d] update start marker=%d, start time=%lld\n",
@@ -3381,6 +3430,14 @@ static int mxc_epdc_fb_send_single_update(struct mxcfb_update_data *upd_data,
 			       upd_data->update_region.width, upd_data->update_region.height,
 						 upd_data->flags);
 		}
+
+#ifdef CONFIG_TRACING
+		/* Systrace entry for update start */
+		if (mxc_epdc_systrace) {
+			tracing_mark_write("EPDC_update start",true, marker_data->update_marker);
+			tracing_mark_write("",false, marker_data->update_marker);
+		}
+#endif /* CONFIG_TRACING */
 	}
 
 	/* Queued update scheme processing */
@@ -3709,6 +3766,24 @@ static int mxc_epdc_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	int ret = -EINVAL;
 
 	switch (cmd) {
+	case MXCFB_WAIT_FOR_VSYNC:
+		{
+			long long timestamp;
+			struct mxc_epdc_fb_data *fb_data = info ?
+				(struct mxc_epdc_fb_data *)info:g_fb_data;
+			int delaytime = (1000/fb_data->cur_mode->vmode->refresh);
+			mdelay(delaytime);
+			timestamp = ktime_to_ns(ktime_get());
+
+			ret = 0;
+			if ((ret == 0) && copy_to_user((void *)arg,
+					&timestamp, sizeof(timestamp))) {
+				ret = -EFAULT;
+				break;
+			}
+		}
+
+		break;
 	case MXCFB_SET_WAVEFORM_MODES:
 		{
 			struct mxcfb_waveform_modes modes;
@@ -3832,6 +3907,18 @@ static int mxc_epdc_fb_ioctl(struct fb_info *info, unsigned int cmd,
 						(int __user *)argp))
 				ret = -EFAULT;
 			ret = 0;
+			break;
+		}
+	case MXCFB_GET_REFRESH_RATE:
+		{
+			/* copy the epdc working buffer to the user space */
+			struct mxc_epdc_fb_data *fb_data = info ?
+				(struct mxc_epdc_fb_data *)info:g_fb_data;
+			if (put_user(fb_data->cur_mode->vmode->refresh,
+				(int __user *)argp))
+				ret = -EFAULT;
+			else
+				ret = 0;
 			break;
 		}
 	case MXCFB_SET_RESUME:
@@ -4411,10 +4498,20 @@ static irqreturn_t mxc_epdc_irq_handler(int irq, void *data)
 					/* Signal completion of update */
 					dev_dbg(fb_data->dev, "Signaling marker %d\n", next_marker->update_marker);
 
-					if (mxc_epdc_debugging && next_marker->update_marker) {
-						long long end_time = timeofday_msec();
-						printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
-								next_marker->update_marker, next_marker->update_marker, end_time, end_time - next_marker->start_time);
+					if (next_marker->update_marker) {
+						/* Debug logging for update end */
+						if (mxc_epdc_debugging) {
+							long long end_time = timeofday_msec();
+							printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
+									next_marker->update_marker, next_marker->update_marker, end_time, end_time - next_marker->start_time);
+						}
+#ifdef CONFIG_TRACING
+						/* Systrace entry for update end */
+						if (mxc_epdc_systrace) {
+							tracing_mark_write("EPDC_update end",true, next_marker->update_marker);
+							tracing_mark_write("",false, next_marker->update_marker);
+						}
+#endif /* CONFIG_TRACING */
 					}
 
 					if (next_marker->waiting)
@@ -4517,10 +4614,21 @@ static irqreturn_t mxc_epdc_irq_handler(int irq, void *data)
 				/* Found marker to signal - remove from list */
 				list_del_init(&next_marker->full_list);
 
-				if (mxc_epdc_debugging && next_marker->update_marker) {
-					long long end_time = timeofday_msec();
-					printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
+
+				if (next_marker->update_marker) {
+					/* Debug logging for update end */
+					if (mxc_epdc_debugging) {
+						long long end_time = timeofday_msec();
+						printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
 								next_marker->update_marker, next_marker->update_marker, end_time, end_time - next_marker->start_time);
+					}
+#ifdef CONFIG_TRACING
+					/* Systrace entry for update end */
+					if (mxc_epdc_systrace) {
+						tracing_mark_write("EPDC_update end",true, next_marker->update_marker);
+						tracing_mark_write("",false, next_marker->update_marker);
+					}
+#endif /* CONFIG_TRACING */
 				}
 
 				/* Signal completion of update */
@@ -4807,10 +4915,20 @@ static irqreturn_t mxc_epdc_irq_handler(int irq, void *data)
 					list_del_init(&next_marker->upd_list);
 					list_del_init(&next_marker->full_list);
 
-					if (mxc_epdc_debugging && next_marker->update_marker) {
-						long long end_time = timeofday_msec();
-						printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
-								next_marker->update_marker, next_marker->update_marker, end_time, end_time - next_marker->start_time);
+					if (next_marker->update_marker) {
+						/* Debug logging for update end */
+						if (mxc_epdc_debugging) {
+							long long end_time = timeofday_msec();
+							printk(KERN_INFO "mxc_epdc_fb: [%d] update end marker=%u, end time=%lld, time taken=%lld ms\n",
+									next_marker->update_marker, next_marker->update_marker, end_time, end_time - next_marker->start_time);
+						}
+#ifdef CONFIG_TRACING
+						/* Systrace entry for update end */
+						if (mxc_epdc_systrace) {
+							tracing_mark_write("EPDC_update end",true, next_marker->update_marker);
+							tracing_mark_write("",false, next_marker->update_marker);
+						}
+#endif /* CONFIG_TRACING */
 					}
 
 					/* Signal completion of update */
@@ -5339,7 +5457,7 @@ static ssize_t mxc_epdc_pwrdown_store(struct device *dev, struct device_attribut
 
 	return size;
 }
-static DEVICE_ATTR(pwrdown_delay, 0666, mxc_epdc_pwrdown_show, mxc_epdc_pwrdown_store);
+static DEVICE_ATTR(pwrdown_delay, 0660, mxc_epdc_pwrdown_show, mxc_epdc_pwrdown_store);
 
 static ssize_t mxc_epdc_temperature_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
@@ -5365,7 +5483,7 @@ static ssize_t mxc_epdc_temperature_store(struct device *dev, struct device_attr
 	fb_data->temp_override = value;
 	return size;
 }
-static DEVICE_ATTR(temperature_override, 0666, mxc_epdc_temperature_show, mxc_epdc_temperature_store);
+static DEVICE_ATTR(temperature_override, 0660, mxc_epdc_temperature_show, mxc_epdc_temperature_store);
 
 
 #ifdef CONFIG_FB_MXC_EINK_REAGL
@@ -5398,7 +5516,7 @@ static ssize_t mxc_epdc_reagl_store(struct device *dev, struct device_attribute 
 	fb_data->which_reagl = value;
 	return size;
 }
-static DEVICE_ATTR(mxc_epdc_reagl, 0666, mxc_epdc_reagl_show, mxc_epdc_reagl_store);
+static DEVICE_ATTR(mxc_epdc_reagl, 0660, mxc_epdc_reagl_show, mxc_epdc_reagl_store);
 #endif // CONFIG_FB_MXC_EINK_REAGL
 
 static ssize_t mxc_epdc_wvaddr_show(struct device *dev, struct device_attribute *attr,
@@ -5470,7 +5588,7 @@ static ssize_t mxc_epdc_powerup_store(struct device *dev, struct device_attribut
 
 	return size;
 }
-static DEVICE_ATTR(mxc_epdc_powerup, 0666, mxc_epdc_powerup_show, mxc_epdc_powerup_store);
+static DEVICE_ATTR(mxc_epdc_powerup, 0660, mxc_epdc_powerup_show, mxc_epdc_powerup_store);
 
 static ssize_t mxc_epdc_update_store(struct device *device, struct device_attribute *attr,
                                      const char *buf, size_t count)
@@ -5574,7 +5692,7 @@ static ssize_t mxc_epdc_update_show(struct device *dev, struct device_attribute 
 {
 	return sprintf(buf, "1\n");
 }
-static DEVICE_ATTR(mxc_epdc_update, 0666, mxc_epdc_update_show, mxc_epdc_update_store);
+static DEVICE_ATTR(mxc_epdc_update, 0660, mxc_epdc_update_show, mxc_epdc_update_store);
 
 static ssize_t mxc_epdc_debug_show(struct device *dev, struct device_attribute *attr,
                                    char *buf)
@@ -5636,6 +5754,10 @@ static ssize_t mxc_epdc_debug_store(struct device *dev, struct device_attribute 
 			printk(KERN_ERR "gpio_epd_enable_vcom(0);");
 			gpio_epd_enable_vcom(0);
 		break;
+		case 10:
+		case 11:
+			/* This flag has its effect only when CONFIG_TRACING is defined */
+			mxc_epdc_systrace = value - 10;
 
 		default:
 			break;
@@ -5644,7 +5766,7 @@ static ssize_t mxc_epdc_debug_store(struct device *dev, struct device_attribute 
 	return size;
 }
 
-static DEVICE_ATTR(mxc_epdc_debug, 0666, mxc_epdc_debug_show, mxc_epdc_debug_store);
+static DEVICE_ATTR(mxc_epdc_debug, 0660, mxc_epdc_debug_show, mxc_epdc_debug_store);
 
 
 static ssize_t mxc_cpufreq_override_show(struct device *dev, struct device_attribute *attr,
@@ -5667,7 +5789,7 @@ static ssize_t mxc_cpufreq_override_store(struct device *dev, struct device_attr
 	return size;
 }
 
-static DEVICE_ATTR(mxc_cpufreq_override, 0666, mxc_cpufreq_override_show, mxc_cpufreq_override_store);
+static DEVICE_ATTR(mxc_cpufreq_override, 0660, mxc_cpufreq_override_show, mxc_cpufreq_override_store);
 
 
 static ssize_t mxc_epdc_vcom_show(struct device *dev, struct device_attribute *attr,
@@ -5750,21 +5872,30 @@ static ssize_t mxc_epdc_vcom_store(struct device *dev, struct device_attribute *
 	return size;
 }
 
-static DEVICE_ATTR(vcom_mv, 0666, mxc_epdc_vcom_show, mxc_epdc_vcom_store);
+static DEVICE_ATTR(vcom_mv, 0660, mxc_epdc_vcom_show, mxc_epdc_vcom_store);
 
 static ssize_t mxc_epdc_fp9928_temp_show(struct device *dev, struct device_attribute *attr,
                                    char *buf)
 {
-
 	struct fb_info *info = dev_get_drvdata(dev);
 	struct mxc_epdc_fb_data *fb_data = (struct mxc_epdc_fb_data *)info;
-	int temp;	
+	int temp;
+	int pw_state;
 
 	mutex_lock(&fb_data->power_mutex);
-	gpio_epd_enable_hv(1);
-	msleep(1);
+	pw_state = g_fb_data->power_state;
+	/**
+	 * If EPD has already been enabled (when there is an in-progress update),
+	 * we don't enable/disable it here to avoid breaking the in-progress update.
+	 */
+	if (pw_state == POWER_STATE_OFF) {
+		gpio_epd_enable_hv(1);
+		msleep(1);
+	}
 	temp = fp9928_read_temp();
-	gpio_epd_enable_hv(0);
+	if (pw_state == POWER_STATE_OFF) {
+		gpio_epd_enable_hv(0);
+	}
 	mutex_unlock(&fb_data->power_mutex);
 	return sprintf(buf, "%d\n", temp);
 }

@@ -133,6 +133,7 @@ deps_config := \
 	drivers/platform/goldfish/Kconfig \
 	drivers/platform/x86/Kconfig \
 	drivers/platform/Kconfig \
+	drivers/staging/amazon/Kconfig \
 	drivers/staging/dwc2/Kconfig \
 	drivers/staging/netlogic/Kconfig \
 	drivers/staging/goldfish/Kconfig \
@@ -346,6 +347,8 @@ deps_config := \
 	drivers/video/omap2/Kconfig \
 	drivers/video/omap/Kconfig \
 	drivers/video/geode/Kconfig \
+	drivers/gpu/host1x/drm/Kconfig \
+	drivers/gpu/host1x/Kconfig \
 	drivers/gpu/drm/qxl/Kconfig \
 	drivers/gpu/drm/tilcdc/Kconfig \
 	drivers/gpu/drm/omapdrm/Kconfig \

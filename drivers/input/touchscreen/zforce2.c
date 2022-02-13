@@ -43,7 +43,9 @@
 //#include "boardid.h"
 
 #include "zforceint2.h"
-#include <llog.h>
+#if defined(CONFIG_AMAZON_METRICS_LOG)
+#include <linux/metricslog.h>
+#endif
 
 /* Reliability test only */
 static int reltest = 0;
@@ -53,8 +55,8 @@ static uint dbglog = ZFORCE2_LOG_ERROR;
 static uint bpdr = 0;
 static uint ignore_false_header = 1;
 static uint touchdatapoll=0;
-static uint bpbc=1;
-static uint deviceType=2;
+static uint bpbc=0;
+static uint deviceType=1;
 #ifdef MODULE
 module_param_named(reltest, reltest, int, S_IRUGO);
 MODULE_PARM_DESC(reltest, "LED reliability test");
@@ -129,8 +131,8 @@ ZFStatus stop(void);
 ZFStatus sendAsnEnableDevice(u8 enable);
 ZFStatus sendAsnGetLedLevel(u8 enable);
 ZFStatus SendAsnEnableCalibration(u8 enable);
-ZFStatus sendAsnSetDetection();
-ZFStatus initializeAsnDevice();
+ZFStatus sendAsnSetDetection(void);
+ZFStatus initializeAsnDevice(void);
 ZFStatus sendAsnSetResolution(u16,u16);
 void zforce_free_touch_irq(void);
 int zforce_get_touch_irq(void);
@@ -148,7 +150,6 @@ extern void gpio_zforce_set_bsl_test(int val);
 extern void gpio_zforce_free_pins(void);
 extern void touch_suspend(void);
 extern void touch_resume(void);
-
 
 static void zforce_init_work_handler(struct work_struct *);
 DECLARE_WORK(zforce_init_work, zforce_init_work_handler);
@@ -1026,7 +1027,7 @@ static int zforce_touch_poll_keep(void)
 	return (status == 1 ? 0 : -ETIMEDOUT);
 }
 
-static zforce_touch_data_poll()
+static zforce_touch_data_poll(void)
 {
 	ZFStatus result = ZF_OK;
 	while(1)
@@ -1197,9 +1198,9 @@ static int zforce_i2c_probe(struct i2c_client *client,
 	DEBUG_INFO("Probing i2c\n");
 
 //Fred todo: need to port boardid module. temporarily disable boardid/regulator check for bringup
-//	if(lab126_board_rev_greater(BOARD_ID_BOURBON_WFO_EVT1) ||
-//		lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
-//		lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ) {
+//	if(lab126_board_rev_greater(BOARD_ID_abc123_WFO_EVT1) ||
+//		lab126_board_is(BOARD_ID_abc123_4_256M_CFG_C) ||
+//		lab126_board_is(BOARD_ID_abc123_WFO_PREEVT2) ) {
 		
 		/* To do: maps a supply name to a device in device tree */
 		zforce_data.touchreg = regulator_get(NULL, "ldo4");
@@ -1245,9 +1246,9 @@ static int zforce_i2c_probe(struct i2c_client *client,
 	{
 		//Fred todo: need to port boardid module. temporarily disable boardid/regulator check for bringup
 		#if 0
-		if(lab126_board_rev_greater(BOARD_ID_BOURBON_WFO_EVT1) || 
-			lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
-			lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ) {
+		if(lab126_board_rev_greater(BOARD_ID_abc123_WFO_EVT1) || 
+			lab126_board_is(BOARD_ID_abc123_4_256M_CFG_C) ||
+			lab126_board_is(BOARD_ID_abc123_WFO_PREEVT2) ) {
 		{	
 			regulator_force_disable(zforce_data.touchreg);
 			regulator_put(zforce_data.touchreg);
@@ -1303,9 +1304,9 @@ static int zforce_i2c_remove(struct i2c_client *client)
 
 	#if 0
 	//Fred todo: need to port boardid module. temporarily disable boardid/regulator check for bringup
-	if(lab126_board_rev_greater(BOARD_ID_BOURBON_WFO_EVT1) ||
-		lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ||
-		lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ) {
+	if(lab126_board_rev_greater(BOARD_ID_abc123_WFO_EVT1) ||
+		lab126_board_is(BOARD_ID_abc123_WFO_PREEVT2) ||
+		lab126_board_is(BOARD_ID_abc123_4_256M_CFG_C) ) {
 	{
 		regulator_force_disable(zforce_data.touchreg);
 		regulator_put(zforce_data.touchreg);
@@ -1438,10 +1439,12 @@ static void send_user_event(u8 prev, u8 cur)
 	}
 }
 
-#define METRIC_BUFFER_SIZE  100
 static void sendTouchUpdate(TouchData *tData)
 {
+#ifdef CONFIG_AMAZON_METRICS_LOG
+	#define METRIC_BUFFER_SIZE  100
 	char buff[METRIC_BUFFER_SIZE];
+#endif
 	struct input_dev *tdev = zforce_data.tdev;
 	u8 contacts_left = 0;
 	u8 i;
@@ -1469,8 +1472,14 @@ static void sendTouchUpdate(TouchData *tData)
 				DEBUG_ERR("possible touch looping error!!!\n");
 				false_touch_warning = true;
 
-				snprintf(buff, sizeof(buff)-1, "%d", touch_count);
-				LLOG_DEVICE_METRIC(DEVICE_METRIC_HIGH_PRIORITY, DEVICE_METRIC_TYPE_COUNTER, "kernel", "zforce2", "count", 1, buff);
+#ifdef CONFIG_AMAZON_METRICS_LOG
+
+				memset(buff,0,sizeof(buff));
+				snprintf(buff, sizeof(buff),
+					"kernel:zforce2:touch_count=%d;CT;1:NR",touch_count);
+
+				log_to_metrics(ANDROID_LOG_INFO, "touch", buff);
+#endif
 
 			}
 		} else if (tState == TOUCH_UP || tState == TOUCH_INVALID) {
@@ -1917,7 +1926,7 @@ void processData(u8 request, ZFStatus *result)
 			char *envp[] = {"ZForce2=low_signal", NULL};
 			DEBUG_INFO("Reading Low Signal Alert\n");
 
-			/* TODO WARIO-430 - Requires additional req-resp to get more data
+			/* TODO abc123-430 - Requires additional req-resp to get more data
 			 * dataRead += readLowSignalAlert(&data[dataRead], lowSig); */
 			kobject_uevent_env(&zforce_data.tdev->dev.kobj, KOBJ_CHANGE, envp);
 			if (request == TYPE_LOW_SIGNAL_ALERT)
@@ -2227,7 +2236,7 @@ ZFStatus sendSetScanningFrequency(u16 idle, u16 finger, u16 stylus)
 	if (zforce_touch_poll())
 		return ZF_ERROR;
 
-	mutex_unlock(&comm_mutex);
+	mutex_lock(&comm_mutex);
 	processData(SCANNING_FREQ_CMD, &result);
 	mutex_unlock(&comm_mutex);
 	if (result != ZF_OK) {
@@ -2694,7 +2703,7 @@ ZFStatus sendAsnEnableDevice(u8 enable)
         return result;
 }
 
-ZFStatus sendAsnGetTouchFormat()
+ZFStatus sendAsnGetTouchFormat(void)
 {
 	u8 MsgLen=10;
 	u8 command[11]={0xEE,0x08,0xEE,0x06,0x40,0x02,0x01,0x00,0x66,0x00}; //Core Device
@@ -2713,7 +2722,7 @@ ZFStatus sendAsnGetTouchFormat()
         return result;
 }
 
-ZFStatus sendAsnSetDetection()
+ZFStatus sendAsnSetDetection(void)
 {
 	u8 MsgLen=13;
 	u8 command[14]={0xEE,0x0B,0xEE,0x09,0x40,0x02,0x01,0x00,0x67,0x03,0x80,0x01,0xFF}; //Core Device
@@ -2780,7 +2789,7 @@ ZFStatus SendAsnEnableCalibration(u8 enable)
 	return result;
 }
 
-ZFStatus sendAsnDeviceInfo()
+ZFStatus sendAsnDeviceInfo(void)
 {
 	u8 MsgLen=10;
 	u8 command[11]={0xEE,0x08,0xEE,0x06,0x40,0x02,0x00,0x00,0x6c,0x00}; 
@@ -2799,7 +2808,7 @@ ZFStatus sendAsnDeviceInfo()
         return result;
 }
 
-ZFStatus sendAsnEnumerteDevice()
+ZFStatus sendAsnEnumerteDevice(void)
 {
 	u8 MsgLen=10;
 	u8 command[11]={0xEE,0x08,0xEE,0x06,0x40,0x02,0x00,0x00,0x6f,0x00}; 
@@ -3102,7 +3111,7 @@ static int zforce_probe(struct platform_device* pdev)
 	}
 
 //	proc_entry = create_proc_entry(ZF_PROC_NAME, 0644, NULL );
-	proc_entry = proc_create(ZF_PROC_NAME, 0, NULL, &proc_file_fops);
+	proc_entry = proc_create(ZF_PROC_NAME, S_IWUGO | S_IRUGO, NULL, &proc_file_fops);
 	if (proc_entry == NULL) {
 		DEBUG_ERR("create_proc: could not create proc entry\n");
 		goto out_remove_misc_file;
@@ -3205,6 +3214,14 @@ static void zforce_set_ready_for_update(void)
 
 static void zforce_set_suspend_pads(void)
 {
+	/* store exit/normal config */
+//	mxc_iomux_v3_get_multiple_pads(zforce2_suspend_exit_pads,
+//		ARRAY_SIZE(zforce2_suspend_exit_pads));
+
+	/* set suspend config */
+//	mxc_iomux_v3_setup_multiple_pads(zforce2_suspend_enter_pads,
+//		ARRAY_SIZE(zforce2_suspend_enter_pads));
+
 	/* Put all GPIOs to output low */
 	gpio_direction_output( IMX_GPIO_NR(4, 3) , 0);
 	gpio_direction_output( IMX_GPIO_NR(4, 5) , 0);
@@ -3216,6 +3233,8 @@ static void zforce_set_suspend_pads(void)
 
 static void zforce_set_normal_pads(void)
 {
+//	mxc_iomux_v3_setup_multiple_pads(zforce2_suspend_exit_pads,
+//		ARRAY_SIZE(zforce2_suspend_exit_pads));
 
 	mdelay(10);
 	/* GPIO Interrupt - is set as input */
@@ -3240,7 +3259,7 @@ static int zforce_suspend_touch(void)
 
 	msleep(5);
 	zforce_set_suspend_pads();
-
+	
 	/* power cut at the end of supsend */
 	printk(KERN_ERR "Suspend touch\n");
 	msleep(5);
@@ -3251,7 +3270,7 @@ static int zforce_suspend_touch(void)
 			__func__);
 		return -EAGAIN;
 	}
-
+	
 	return 0;
 }
 

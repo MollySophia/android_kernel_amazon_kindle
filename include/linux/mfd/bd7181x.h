@@ -431,6 +431,7 @@ enum {
 #define BD7181X_TEST_REG_SEQ_INTV_TIME_MIN			0x00
 #define BD7181X_TEST_REG_SEQ_INTV_TIME_INIT			0x07
 #define BD7181X_TEST_REG_ACCESS_USER_AREA			0x00
+#define BD7181X_TEST_REG_VOLT_OFFSEQ_CTL			0x02
 
 /** @brief charge state enumuration */
 enum CHG_STATE {
@@ -485,6 +486,7 @@ struct bd7181x {
 
 	struct bd7181x_board *of_plat_data;
 	/**< Device node parsed board data */
+       struct input_dev *input;
 };
 
 static inline int bd7181x_chip_id(struct bd7181x *bd7181x)
@@ -591,7 +593,10 @@ struct int_status_reg {
 
 u8 ext_bd7181x_reg_read8(u8 reg);
 int ext_bd7181x_reg_write8(int reg, u8 val);
-int bd7181x_set_software_reset_flag(void) ;
+int bd7181x_set_software_reset_flag(void);
+int bd7181x_set_poweroff_flag(void);
+int bd7181x_set_boot_mode(int boot_mode);
+int bd7181x_get_boot_mode(void);
 
 #endif /* __LINUX_MFD_BD7181X_H */
 

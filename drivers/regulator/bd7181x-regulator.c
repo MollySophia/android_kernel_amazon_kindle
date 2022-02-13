@@ -25,6 +25,16 @@
 #include <linux/mfd/bd7181x.h>
 #include <linux/regulator/of_regulator.h>
 
+/* BD71827_REG_BUCK1_MODE bits */
+#define BUCK1_RAMPRATE_MASK	0xC0
+#define BUCK1_RAMPRATE_10P00MV	0x0
+#define BUCK1_RAMPRATE_5P00MV	0x1
+#define BUCK1_RAMPRATE_2P50MV	0x2
+#define BUCK1_RAMPRATE_1P25MV	0x3
+
+/* BUCK1/2 DVS I2C ramp delay latency 80~140uS (page 14/95 in the BD71817 datasheet) */
+#define BUCK12_DVS_I2C_RAMP_DELAY 140 /* 140 uS (worst case) */
+
 #define BD7181X_VOL_OFFSET          0
 #define BD7181X_STANDBY_OFFSET      0
 #define BD7181X_BUCK1_09V_SUSPEND   0x04
@@ -58,25 +68,47 @@ static const int bd7181x_wled_currents[] = {
 	23000, 24000, 25000,
 };
 
+/*
+ * BUCK1/2
+ * BUCK1RAMPRATE[1:0] BUCK1 DVS ramp rate setting
+ * 00: 10.00mV/usec 10mV 1uS
+ * 01: 5.00mV/usec	10mV 2uS
+ * 10: 2.50mV/usec	10mV 4uS
+ * 11: 1.25mV/usec	10mV 8uS
+ */
 static int bd7181x_set_ramp_delay(struct regulator_dev *rdev, int ramp_delay) {
 	struct bd7181x_pmic *pmic = rdev_get_drvdata(rdev);
 	struct bd7181x *mfd = pmic->mfd;
-	// int id = rdev->desc->id;
-	unsigned int ramp_bits;
-	int ret;
+	int id = rdev->desc->id;
+	unsigned int ramp_value = BUCK1_RAMPRATE_10P00MV;
 
-	if (1 /*TODO*/ ) {
-		ramp_delay = 12500 / ramp_delay;
-		ramp_bits = (ramp_delay >> 1) - (ramp_delay >> 3);
-		ret = regmap_update_bits(mfd->regmap,
-					 rdev->desc->vsel_reg + 4,
-					 0xc0, ramp_bits << 6);
-		if (ret < 0)
-			dev_err(pmic->dev, "ramp failed, err %d\n", ret);
-	} else
-		ret = -EACCES;
+	/* ramp rate config is only available for buck1 and buck 2 */
+	if (id <= BD7181X_BUCK2) {
+		dev_dbg(pmic->dev, "Buck[%d] Set Ramp = %d\n", id + 1, ramp_delay);
+		switch (ramp_delay) {
+		case 1 ... 1250:
+			ramp_value = BUCK1_RAMPRATE_1P25MV;
+			break;
+		case 1251 ... 2500:
+			ramp_value = BUCK1_RAMPRATE_2P50MV;
+			break;
+		case 2501 ... 5000:
+			ramp_value = BUCK1_RAMPRATE_5P00MV;
+			break;
+		case 5001 ... 10000:
+			ramp_value = BUCK1_RAMPRATE_10P00MV;
+			break;
+		default:
+			ramp_value = BUCK1_RAMPRATE_10P00MV;
+			dev_err(pmic->dev, "%s: ramp_delay: %d not supported, setting 10000mV//us\n",
+				rdev->desc->name, ramp_delay);
+		}
 
-	return ret;
+		return regmap_update_bits(mfd->regmap, BD7181X_REG_BUCK1_MODE + id,
+					  BUCK1_RAMPRATE_MASK, ramp_value << 6);
+	}
+
+	return -EACCES;
 }
 
 static int bd7181x_led_set_current_limit(struct regulator_dev *rdev,
@@ -97,6 +129,20 @@ static int bd7181x_led_set_current_limit(struct regulator_dev *rdev,
 	}
 
 	return -EINVAL;
+}
+
+/*
+ * Custom bd7181x set_voltage_time_sel() routine to return the
+ * total ramp up time =
+ *         voltage ramp-up time + PMIC DVS I2C delay (80~140uS)
+ */
+static int bd7181x_regulator_set_voltage_time_sel(struct regulator_dev *rdev,
+						  unsigned int old_selector,
+						  unsigned int new_selector)
+{
+	int delay = regulator_set_voltage_time_sel(rdev, old_selector, new_selector);
+
+	return (delay > 0)? BUCK12_DVS_I2C_RAMP_DELAY + delay : delay;
 }
 
 static int bd7181x_led_get_current_limit(struct regulator_dev *rdev)
@@ -143,7 +189,7 @@ static struct regulator_ops bd7181x_buck_regulator_ops = {
 	.list_voltage = regulator_list_voltage_linear,
 	.set_voltage_sel = regulator_set_voltage_sel_regmap,
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
-	.set_voltage_time_sel = regulator_set_voltage_time_sel,
+	.set_voltage_time_sel = bd7181x_regulator_set_voltage_time_sel,
 	.set_ramp_delay = bd7181x_set_ramp_delay,
 };
 
@@ -400,8 +446,8 @@ static ssize_t available_values(struct device *dev, struct device_attribute *att
 	return sprintf(buf, "0 1 \n");
 }
 
-static DEVICE_ATTR(out32k_mode, 0666, show_mode, set_mode);
-static DEVICE_ATTR(out32k_value, 0666, show_value, set_value);
+static DEVICE_ATTR(out32k_mode, 0660, show_mode, set_mode);
+static DEVICE_ATTR(out32k_value, 0660, show_value, set_value);
 static DEVICE_ATTR(available_mode, 0444, available_modes, NULL);
 static DEVICE_ATTR(available_value, 0444, available_values, NULL);
 

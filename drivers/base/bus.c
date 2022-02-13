@@ -295,8 +295,9 @@ int bus_for_each_dev(struct bus_type *bus, struct device *start,
 
 	klist_iter_init_node(&bus->p->klist_devices, &i,
 			     (start ? &start->p->knode_bus : NULL));
-	while ((dev = next_device(&i)) && !error)
+	while ((dev = next_device(&i)) && !error) {
 		error = fn(dev, data);
+	}
 	klist_iter_exit(&i);
 	return error;
 }
@@ -497,19 +498,23 @@ int bus_add_device(struct device *dev)
 	if (bus) {
 		pr_debug("bus: '%s': add device %s\n", bus->name, dev_name(dev));
 		error = device_add_attrs(bus, dev);
-		if (error)
+		if (error) {
 			goto out_put;
+		}
 		error = device_add_groups(dev, bus->dev_groups);
-		if (error)
+		if (error) {
 			goto out_groups;
+		}
 		error = sysfs_create_link(&bus->p->devices_kset->kobj,
 						&dev->kobj, dev_name(dev));
-		if (error)
+		if (error) {
 			goto out_id;
+		}
 		error = sysfs_create_link(&dev->kobj,
 				&dev->bus->p->subsys.kobj, "subsystem");
-		if (error)
+		if (error) {
 			goto out_subsys;
+		}
 		klist_add_tail(&dev->p->knode_bus, &bus->p->klist_devices);
 	}
 	return 0;

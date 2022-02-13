@@ -116,6 +116,10 @@ struct cpufreq_interactive_tunables {
 	bool io_is_busy;
 };
 
+#ifdef CONFIG_CPU_FREQ_OVERRIDE_LAB126
+#define DEFAULT_OVERRIDE_BOOSTPULSE_TIME (1600 * USEC_PER_MSEC)
+#endif
+
 /* For cases where we have single governor instance for system */
 struct cpufreq_interactive_tunables *common_tunables;
 
@@ -1337,6 +1341,27 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	}
 	return 0;
 }
+#ifdef CONFIG_CPU_FREQ_OVERRIDE_LAB126
+static int cpufreq_governor_override(struct cpufreq_policy *policy,
+		unsigned int is_override)
+{
+
+	struct cpufreq_interactive_tunables *tunables;
+
+	if (have_governor_per_policy())
+		tunables = policy->governor_data;
+	else
+		tunables = common_tunables;
+
+	if (is_override) {
+		tunables->boostpulse_endtime = ktime_to_us(ktime_get()) +
+			DEFAULT_OVERRIDE_BOOSTPULSE_TIME;
+		trace_cpufreq_interactive_boost("pulse");
+		cpufreq_interactive_boost();
+	}
+	return 0;
+}
+#endif
 
 #ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE
 static
@@ -1344,6 +1369,9 @@ static
 struct cpufreq_governor cpufreq_gov_interactive = {
 	.name = "interactive",
 	.governor = cpufreq_governor_interactive,
+#ifdef CONFIG_CPU_FREQ_OVERRIDE_LAB126
+       .override = cpufreq_governor_override,
+#endif
 	.max_transition_latency = 10000000,
 	.owner = THIS_MODULE,
 };

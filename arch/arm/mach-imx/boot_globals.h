@@ -11,7 +11,7 @@
 #define FRAMEBUFFER_SIZE            (PAGE_SIZE * 30)
 #define ENV_SCRIPT_STR_SZ           256
 
-// For Yoshi-based Systems.
+// For abc123-based Systems.
 //
 #define PLFRM_MEM_BASE              0x70000000
 #define PLFRM_MEM_SIZE              0x10000000
@@ -20,7 +20,7 @@
 // For now, set BOOT_GLOBALS_BASE to 0.  This causes configure_boot_globals() in
 // boot_globals.c to fake them.
 //
-// OOPS and POST aren't used on Yoshi-based systems at the moment.
+// OOPS and POST aren't used on abc123-based systems at the moment.
 //
 #define BOOT_GLOBALS_SIZE           PAGE_SIZE
 #define BOOT_GLOBALS_BASE           0 //PLFRM_MEM_BASE

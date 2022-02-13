@@ -347,8 +347,8 @@ struct ion_heap *ion_system_heap_create(struct ion_platform_heap *unused)
 		heap->pools[i] = pool;
 	}
 
-	//heap->heap.shrinker.scan_objects = ion_system_heap_shrink_scan;
-	//heap->heap.shrinker.count_objects = ion_system_heap_shrink_count;
+	heap->heap.shrinker.scan_objects = ion_system_heap_shrink_scan;
+	heap->heap.shrinker.count_objects = ion_system_heap_shrink_count;
 	heap->heap.shrinker.seeks = DEFAULT_SEEKS;
 	heap->heap.shrinker.batch = 0;
 	register_shrinker(&heap->heap.shrinker);

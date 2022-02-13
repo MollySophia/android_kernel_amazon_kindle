@@ -382,6 +382,10 @@ config BD7181X_POWER
         help
           Say Y to enable support for the BD71815/BD71817 charger.
 
+config AMAZON_SIGN_OF_LIFE_BD7181X
+	bool "BD71817X - Sign of Life "
+	default n
+
 source "drivers/power/reset/Kconfig"
 
 endif # POWER_SUPPLY

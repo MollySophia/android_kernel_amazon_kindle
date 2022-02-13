@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_cdc.c 498632 2014-08-25 14:09:22Z $
+ * $Id: dhd_cdc.c 492377 2014-07-21 19:54:06Z $
  *
  * BDC is like CDC, except it includes a header for data packets to convey
  * packet priority over the bus, and flags (e.g. to indicate checksum status
@@ -119,22 +119,29 @@ dhdcdc_query_ioctl(dhd_pub_t *dhd, int ifidx, uint cmd, void *buf, uint len, uin
 	cdc_ioctl_t *msg = &prot->msg;
 	int ret = 0, retries = 0;
 	uint32 id, flags = 0;
+	uint copylen = 0;
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 	DHD_CTL(("%s: cmd %d len %d\n", __FUNCTION__, cmd, len));
-
+	if (!len || !buf) {
+		DHD_ERROR(("%s(): Zero length bailing\n", __FUNCTION__));
+		ret = BCME_BADARG;
+		goto done;
+	}
 
 	/* Respond "bcmerror" and "bcmerrorstr" with local cache */
 	if (cmd == WLC_GET_VAR && buf)
 	{
-		if (!strcmp((char *)buf, "bcmerrorstr"))
-		{
-			strncpy((char *)buf, bcmerrorstr(dhd->dongle_error), BCME_STRLEN);
+		copylen = MIN(len, BCME_STRLEN);
+		if ((len >= strlen("bcmerrorstr")) &&
+			(!strcmp((char *)buf, "bcmerrorstr"))) {
+			strncpy((char *)buf, bcmerrorstr(dhd->dongle_error), copylen);
+			*(uint8 *)((uint8 *)buf + (copylen - 1)) = '\0';
 			goto done;
-		}
-		else if (!strcmp((char *)buf, "bcmerror"))
-		{
-			*(int *)buf = dhd->dongle_error;
+		} else if ((len >= strlen("bcmerror")) &&
+			!strcmp((char *)buf, "bcmerror")) {
+			*(uint32 *)buf = dhd->dongle_error;
+			*(uint8 *)((uint8 *)buf + (sizeof(uint32))) = '\0';
 			goto done;
 		}
 	}
@@ -272,10 +279,22 @@ dhd_prot_ioctl(dhd_pub_t *dhd, int ifidx, wl_ioctl_t * ioc, void * buf, int len)
 	int ret = -1;
 	uint8 action;
 
+#ifdef CONFIG_LAB126
+	dhd_os_sdlock(dhd);
+#endif /* CONFIG_LAB126 */
 	if ((dhd->busstate == DHD_BUS_DOWN) || dhd->hang_was_sent) {
+#ifdef CONFIG_LAB126
+		dhd_os_sdunlock(dhd);
+		DHD_ERROR(("%s:%d %s: bus is down. we have nothing to do\n",
+			   current->comm, current->pid, __FUNCTION__));
+#else /* !CONFIG_LAB126 */
 		DHD_ERROR(("%s : bus is down. we have nothing to do\n", __FUNCTION__));
+#endif /* CONFIG_LAB126 */
 		goto done;
 	}
+#ifdef CONFIG_LAB126
+	dhd_os_sdunlock(dhd);
+#endif /* CONFIG_LAB126 */
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
@@ -379,6 +398,17 @@ dhd_prot_hdrpush(dhd_pub_t *dhd, int ifidx, void *PKTBUF)
 }
 #undef PKTBUF	/* Only defined in the above routine */
 
+uint
+dhd_prot_hdrlen(dhd_pub_t *dhd, void *PKTBUF)
+{
+	uint hdrlen = 0;
+#ifdef BDC
+	/* Length of BDC(+WLFC) headers pushed */
+	hdrlen = BDC_HEADER_LEN + (((struct bdc_header *)PKTBUF)->dataOffset * 4);
+#endif
+	return hdrlen;
+}
+
 int
 dhd_prot_hdrpull(dhd_pub_t *dhd, int *ifidx, void *pktbuf, uchar *reorder_buf_info,
 	uint *reorder_info_len)
@@ -410,7 +440,11 @@ dhd_prot_hdrpull(dhd_pub_t *dhd, int *ifidx, void *pktbuf, uchar *reorder_buf_in
 		goto exit;
 	}
 
-	*ifidx = BDC_GET_IF_IDX(h);
+	if ((*ifidx = BDC_GET_IF_IDX(h)) >= DHD_MAX_IFS) {
+		DHD_ERROR(("%s: rx data ifnum out of range (%d)\n",
+		           __FUNCTION__, *ifidx));
+		return BCME_ERROR;
+	}
 
 	if (((h->flags & BDC_FLAG_VER_MASK) >> BDC_FLAG_VER_SHIFT) != BDC_PROTO_VER) {
 		DHD_ERROR(("%s: non-BDC packet received, flags = 0x%x\n",
@@ -494,7 +528,8 @@ dhd_prot_detach(dhd_pub_t *dhd)
 void
 dhd_prot_dstats(dhd_pub_t *dhd)
 {
-/* No stats from dongle added yet, copy bus stats */
+	/*  copy bus stats */
+
 	dhd->dstats.tx_packets = dhd->tx_packets;
 	dhd->dstats.tx_errors = dhd->tx_errors;
 	dhd->dstats.rx_packets = dhd->rx_packets;
@@ -505,7 +540,7 @@ dhd_prot_dstats(dhd_pub_t *dhd)
 }
 
 int
-dhd_prot_init(dhd_pub_t *dhd)
+dhd_sync_with_dongle(dhd_pub_t *dhd)
 {
 	int ret = 0;
 	wlc_rev_info_t revinfo;
@@ -519,13 +554,23 @@ dhd_prot_init(dhd_pub_t *dhd)
 		goto done;
 
 
+	dhd_process_cid_mac(dhd, TRUE);
+
 	ret = dhd_preinit_ioctls(dhd);
+
+	if (!ret)
+		dhd_process_cid_mac(dhd, FALSE);
 
 	/* Always assumes wl for now */
 	dhd->iswl = TRUE;
 
 done:
 	return ret;
+}
+
+int dhd_prot_init(dhd_pub_t *dhd)
+{
+	return TRUE;
 }
 
 void

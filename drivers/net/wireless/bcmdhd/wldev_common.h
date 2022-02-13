@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wldev_common.h 434085 2013-11-05 06:09:49Z $
+ * $Id: wldev_common.h 504503 2014-09-24 11:28:56Z $
  */
 #ifndef __WLDEV_COMMON_H__
 #define __WLDEV_COMMON_H__
@@ -101,6 +101,10 @@ extern int net_os_wake_lock_timeout_enable(struct net_device *dev, int val);
 extern int net_os_set_dtim_skip(struct net_device *dev, int val);
 extern int net_os_set_suspend_disable(struct net_device *dev, int val);
 extern int net_os_set_suspend(struct net_device *dev, int val, int force);
+#ifdef LAB126_SUPPORT_CUSTOM_PKTFILTER
+extern int net_os_rxfilter_add_del_custom_config(struct net_device *dev,
+			char *extra, int add, int len);
+#endif
 extern int wl_iw_parse_ssid_list_tlv(char** list_str, wlc_ssid_t* ssid,
 	int max, int *bytes_left);
 
@@ -114,5 +118,6 @@ int wldev_get_ssid(struct net_device *dev, wlc_ssid_t *pssid);
 int wldev_get_band(struct net_device *dev, uint *pband);
 
 int wldev_set_band(struct net_device *dev, uint band);
+
 
 #endif /* __WLDEV_COMMON_H__ */

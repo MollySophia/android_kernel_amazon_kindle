@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wldev_common.c 432642 2013-10-29 04:23:40Z $
+ * $Id: wldev_common.c 504503 2014-09-24 11:28:56Z $
  */
 
 #include <osl.h>
@@ -173,8 +173,12 @@ s32 wldev_mkiovar_bsscfg(
 		return BCME_BUFTOOSHORT;
 	}
 
-	p = (s8 *)iovar_buf;
+	if (iovar_buf && buflen != 0)
+		memset(iovar_buf, 0, buflen);
+	else
+		return BCME_BADARG;
 
+	p = (s8 *)iovar_buf;
 	/* copy prefix, no null */
 	memcpy(p, prefix, prefixlen);
 	p += prefixlen;
@@ -272,6 +276,7 @@ int wldev_get_link_speed(
 
 	if (!plink_speed)
 		return -ENOMEM;
+	*plink_speed = 0;
 	error = wldev_ioctl(dev, WLC_GET_RATE, plink_speed, sizeof(int), 0);
 	if (unlikely(error))
 		return error;
@@ -306,6 +311,7 @@ int wldev_get_ssid(
 
 	if (!pssid)
 		return -ENOMEM;
+	memset(pssid, 0, sizeof(wlc_ssid_t));
 	error = wldev_ioctl(dev, WLC_GET_SSID, pssid, sizeof(wlc_ssid_t), 0);
 	if (unlikely(error))
 		return error;
@@ -317,7 +323,7 @@ int wldev_get_band(
 	struct net_device *dev, uint *pband)
 {
 	int error;
-
+	*pband = 0;
 	error = wldev_ioctl(dev, WLC_GET_BAND, pband, sizeof(uint), 0);
 	return error;
 }
@@ -378,8 +384,13 @@ int wldev_set_country(
 			return error;
 		}
 		dhd_bus_country_set(dev, &cspec, notify);
+#ifdef CONFIG_LAB126
+		pr_info("%s: set country for %s as %s rev %d\n",
+			__func__, country_code, cspec.ccode, cspec.rev);
+#else /* !CONFIG_LAB126 */
 		WLDEV_ERROR(("%s: set country for %s as %s rev %d\n",
 			__FUNCTION__, country_code, cspec.ccode, cspec.rev));
+#endif /* CONFIG_LAB126 */
 	}
 	return 0;
 }

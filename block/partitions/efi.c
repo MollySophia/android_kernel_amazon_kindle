@@ -669,6 +669,16 @@ int efi_partition(struct parsed_partitions *state)
 			info->volname[label_count] = c;
 			label_count++;
 		}
+#ifdef CONFIG_LAB126
+		/* Extend the "userdata" partition to the end of emmc physical sectors
+		 * 	   to support different emmc sizes */
+		if (!strncmp(info->volname, "userdata", 8)) {
+			u64 total_sectors = i_size_read(state->bdev->bd_inode) >> 9;
+
+			size = total_sectors - le64_to_cpu(ptes[i].starting_lba) + 1ULL - 80ULL; /*SECONDARY_GPT_SECTORS*/
+			put_partition(state, i+1, start * ssz, size * ssz);
+		}
+#endif
 		state->parts[i + 1].has_info = true;
 	}
 	kfree(ptes);

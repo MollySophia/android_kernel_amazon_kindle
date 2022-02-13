@@ -23,7 +23,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh.h 455573 2014-02-14 17:49:31Z $
+ * $Id: bcmsdh.h 450676 2014-01-22 22:45:13Z $
  */
 
 /**
@@ -66,6 +66,10 @@ struct bcmsdh_info
 
 /* Detach - freeup resources allocated in attach */
 extern int bcmsdh_detach(osl_t *osh, void *sdh);
+
+#ifdef CONFIG_LAB126
+extern bcmsdh_info_t *l_bcmsdh;
+#endif /* CONFIG_LAB126 */
 
 /* Query if SD device interrupts are enabled */
 extern bool bcmsdh_intr_query(void *sdh);

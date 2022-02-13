@@ -476,7 +476,7 @@ static int ping_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	pr_debug("ping_sendmsg(sk=%p,sk->num=%u)\n", inet, inet->inet_num);
 
 
-	if (len > 0xFFFF)
+	if (len > 0xFFFF || len < len)
 		return -EMSGSIZE;
 
 	/*

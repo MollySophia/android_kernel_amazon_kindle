@@ -59,7 +59,7 @@ int sysctl_tcp_limit_output_bytes __read_mostly = 131072;
  */
 int sysctl_tcp_tso_win_divisor __read_mostly = 3;
 
-int sysctl_tcp_mtu_probing __read_mostly = 0;
+int sysctl_tcp_mtu_probing __read_mostly = 1;
 int sysctl_tcp_base_mss __read_mostly = TCP_BASE_MSS;
 
 /* By default, RFC2861 behavior.  */

@@ -21,6 +21,19 @@
 #include <linux/usb/composite.h>
 #include <asm/unaligned.h>
 
+/**
+ * Split String IDs to 2 ranges:
+ *     1..128: this range cannot be reused without unbinding whole composite device.
+ *             ID is allocated by usb_string_id(), usb_string_ids_tab() and usb_string_ids_n()
+ *
+ *   129..254: this range can be reused without unbinding whole composite device.
+ *             ID is allocated by usb_reusable_string_ids_n().
+ *             calling usb_cleanup_reusable_string_ids() before start reusing.
+ */
+#define MAX_STRING_ID 254
+#define MAX_ALLOC_STRING_ID 128
+#define START_REUSABLE_STRING_ID 128
+
 /*
  * The code in this file is utility code, used to build a gadget driver
  * from one or more "function" drivers, one or more "configuration"
@@ -1014,7 +1027,7 @@ static int get_string(struct usb_composite_dev *cdev,
  */
 int usb_string_id(struct usb_composite_dev *cdev)
 {
-	if (cdev->next_string_id < 254) {
+	if (cdev->next_string_id < MAX_ALLOC_STRING_ID) {
 		/* string id 0 is reserved by USB spec for list of
 		 * supported languages */
 		/* 255 reserved as well? -- mina86 */
@@ -1046,7 +1059,7 @@ int usb_string_ids_tab(struct usb_composite_dev *cdev, struct usb_string *str)
 	int next = cdev->next_string_id;
 
 	for (; str->s; ++str) {
-		if (unlikely(next >= 254))
+		if (unlikely(next >= MAX_ALLOC_STRING_ID))
 			return -ENODEV;
 		str->id = ++next;
 	}
@@ -1192,12 +1205,35 @@ EXPORT_SYMBOL_GPL(usb_gstrings_attach);
 int usb_string_ids_n(struct usb_composite_dev *c, unsigned n)
 {
 	unsigned next = c->next_string_id;
-	if (unlikely(n > 254 || (unsigned)next + n > 254))
+	if (unlikely(n > MAX_ALLOC_STRING_ID || (unsigned)next + n > MAX_ALLOC_STRING_ID))
 		return -ENODEV;
 	c->next_string_id += n;
 	return next + 1;
 }
 EXPORT_SYMBOL_GPL(usb_string_ids_n);
+
+/**
+ * usb_reusable_string_ids_n() - same as usb_string_ids_n(), but it allocates string IDs
+ * that can be re-used after unbinding gadget driver.
+ */
+int usb_reusable_string_ids_n(struct usb_composite_dev *c, unsigned n)
+{
+	unsigned next = c->next_reuse_string_id;
+	if (unlikely(n > MAX_STRING_ID || (unsigned)next + n > MAX_STRING_ID))
+		return -ENODEV;
+	c->next_reuse_string_id += n;
+	return next + 1;
+}
+EXPORT_SYMBOL_GPL(usb_reusable_string_ids_n);
+
+/**
+ * usb_cleanup_reusable_string_ids() - clean up string ids allocated by usb_reusable_string_ids_n().
+ */
+int usb_cleanup_reusable_string_ids(struct usb_composite_dev *c)
+{
+	c->next_reuse_string_id = START_REUSABLE_STRING_ID;
+}
+EXPORT_SYMBOL_GPL(usb_cleanup_reusable_string_ids);
 
 /*-------------------------------------------------------------------------*/
 
@@ -1509,6 +1545,7 @@ void composite_disconnect(struct usb_gadget *gadget)
 		reset_config(cdev);
 	if (cdev->driver->disconnect)
 		cdev->driver->disconnect(cdev);
+	usb_cleanup_reusable_string_ids(cdev);
 	spin_unlock_irqrestore(&cdev->lock, flags);
 }
 
@@ -1657,6 +1694,7 @@ void composite_dev_cleanup(struct usb_composite_dev *cdev)
 		usb_ep_free_request(cdev->gadget->ep0, cdev->req);
 	}
 	cdev->next_string_id = 0;
+	usb_cleanup_reusable_string_ids(cdev);
 	device_remove_file(&cdev->gadget->dev, &dev_attr_suspended);
 }
 
@@ -1673,6 +1711,7 @@ static int composite_bind(struct usb_gadget *gadget,
 
 	spin_lock_init(&cdev->lock);
 	cdev->gadget = gadget;
+	usb_cleanup_reusable_string_ids(cdev);
 	set_gadget_data(gadget, cdev);
 	INIT_LIST_HEAD(&cdev->configs);
 	INIT_LIST_HEAD(&cdev->gstrings);

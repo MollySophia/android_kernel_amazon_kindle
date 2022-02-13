@@ -397,6 +397,6 @@ typedef struct ZForceDrvData_s
 } ZForceDrvData;
 
 /* Prototypes */
-/* TODO: Jira WARIO-428
+/* TODO: Jira abc123-428
 static void zforce_set_ready_for_update(void); */
 #endif // __ZFORCEINT_H__

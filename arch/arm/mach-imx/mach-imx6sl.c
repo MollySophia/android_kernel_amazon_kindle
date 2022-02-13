@@ -23,27 +23,29 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/system_misc.h>
+#include <linux/memblock.h>
+#include <asm/setup.h>
 #include <linux/gpio.h>
 #include "common.h"
 #include "cpuidle.h"
 #include "hardware.h"
 #include "regs-anadig.h"
 
-/* Wario pins related to BRCM 4343W Wifi module */
+/* abc123 pins related to BRCM 4343W Wifi module */
 /* TODO remove these since these should be fetched from DTS JEIGHT-114 */
-#define		MX6SL_WARIO_WL_REG_ON	IMX_GPIO_NR(2, 15)	/* LCD_CLK - WIFI_RESET_B */
+#define		MX6SL_abc123_WL_REG_ON	IMX_GPIO_NR(2, 15)	/* LCD_CLK - WIFI_RESET_B */
 #if 0
 // TODO: Fix it!
 // (3,31) is the correct pin, but when set up, it causes the driver to explode during suspend for some reason.
 // (maybe trying to wake up after power or bus has been pulled out from under it or something)
-#define		MX6SL_WARIO_WIFI_WAKE_ON_LAN_B	IMX_GPIO_NR(3, 31)	/* KEY_ROW3 */
+#define		MX6SL_abc123_WIFI_WAKE_ON_LAN_B	IMX_GPIO_NR(3, 31)	/* KEY_ROW3 */
 #else
-#define		MX6SL_WARIO_WIFI_WAKE_ON_LAN_B	IMX_GPIO_NR(2, 17)	/* LCD_HSYNC */
+#define		MX6SL_abc123_WIFI_WAKE_ON_LAN_B	IMX_GPIO_NR(2, 17)	/* LCD_HSYNC */
 #endif
-//#define	MX6SL_WARIO_WL_GPIO_1	IMX_GPIO_NR(5,  8)	/* SD1_DAT1 - WIFI_GPIO_1 */
+//#define	MX6SL_abc123_WL_GPIO_1	IMX_GPIO_NR(5,  8)	/* SD1_DAT1 - WIFI_GPIO_1 */
 
-#define MX6SL_WARIO_WL_BOOST_ENAB  IMX_GPIO_NR(4, 23) /* Enable AMP BOOST */
-#define MX6SL_WARIO_WL_AMP_ENAB    IMX_GPIO_NR(3, 10) /* Enable AMP */
+#define MX6SL_abc123_WL_BOOST_ENAB  IMX_GPIO_NR(4, 23) /* Enable AMP BOOST */
+#define MX6SL_abc123_WL_AMP_ENAB    IMX_GPIO_NR(3, 10) /* Enable AMP */
 
 
 /*EANAB TOUCH pins*/
@@ -83,34 +85,34 @@ static amp_boost_enable(int enable)
 	int ret;
 	pr_info("%s:iMX:MAX98090:BOARD\n", __func__);
 
-	ret = gpio_request(MX6SL_WARIO_WL_BOOST_ENAB, "BOOST_ENABLE");
+	ret = gpio_request(MX6SL_abc123_WL_BOOST_ENAB, "BOOST_ENABLE");
 	if (ret < 0) {
 		pr_err("%s:max98090-amp failed to get BOOST_ENABLE %d\n",
 			__func__, ret);
 		return ret;
 	}
-	ret = gpio_request(MX6SL_WARIO_WL_AMP_ENAB, "AMP_ENABLE");
+	ret = gpio_request(MX6SL_abc123_WL_AMP_ENAB, "AMP_ENABLE");
 	if (ret < 0) {
 		pr_err("%s:iMX:MAX98090 failed to get AMP_ENABLE %d\n",
 			__func__, ret);
 		return ret;
 	}
 
-	ret = gpio_direction_output(MX6SL_WARIO_WL_BOOST_ENAB, 0);
+	ret = gpio_direction_output(MX6SL_abc123_WL_BOOST_ENAB, 0);
 	if (ret < 0)  {
 		pr_err("%s:iMX:MAX98090 failed to output BOOST_ENABLE %d\n",
 			__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(MX6SL_WARIO_WL_AMP_ENAB, 0);
+	ret = gpio_direction_output(MX6SL_abc123_WL_AMP_ENAB, 0);
 	if (ret < 0) {
 		pr_err("%s:iMX:MAX98090 failed to output AMP_ENABLE %d\n",
 			__func__, ret);
 		return ret;
 	}
 
-	gpio_set_value(MX6SL_WARIO_WL_BOOST_ENAB, enable);
-	gpio_set_value(MX6SL_WARIO_WL_AMP_ENAB, enable);
+	gpio_set_value(MX6SL_abc123_WL_BOOST_ENAB, enable);
+	gpio_set_value(MX6SL_abc123_WL_AMP_ENAB, enable);
 
 	return ret;
 }
@@ -506,6 +508,48 @@ void gpio_epd_free_pins(void)
 }
 EXPORT_SYMBOL(gpio_epd_free_pins);
 
+extern unsigned long int ramoops_phys_addr;
+extern unsigned long int ramoops_mem_size;
+static void imx6sl_reserve(void)
+{
+	phys_addr_t phys;
+	phys_addr_t max_phys;
+	struct meminfo *mi;
+	struct membank *bank;
+#ifdef CONFIG_PSTORE_RAM
+	mi = &meminfo;
+	if (!mi) {
+		pr_err("no memory reserve for ramoops.\n");
+		return;
+	}
+
+	/* use memmory last bank for ram console store */
+	bank = &mi->bank[mi->nr_banks - 1];
+	if (!bank) {
+		pr_err("no memory reserve for ramoops.\n");
+		return;
+	}
+	max_phys = bank->start + bank->size;
+	/* reserve 64M for uboot avoid ram console data is cleaned by uboot */
+	phys = memblock_alloc_base(SZ_1M, SZ_4K, max_phys - SZ_64M);
+	if (phys) {
+		memblock_remove(phys, SZ_1M);
+		memblock_reserve(phys, SZ_1M);
+		ramoops_phys_addr = phys;
+		ramoops_mem_size = SZ_1M;
+	} else {
+		ramoops_phys_addr = 0;
+		ramoops_mem_size = 0;
+		pr_err("no memory reserve for ramoops.\n");
+	}
+#endif
+
+#ifdef CONFIG_IOHW_RECORD
+	iohwrec_reserve_buf();
+#endif
+	return;
+}
+
 DT_MACHINE_START(IMX6SL, "Freescale i.MX6 SoloLite (Device Tree)")
 	.map_io		= imx6sl_map_io,
 	.init_irq	= imx6sl_init_irq,
@@ -513,8 +557,6 @@ DT_MACHINE_START(IMX6SL, "Freescale i.MX6 SoloLite (Device Tree)")
 	.init_machine	= imx6sl_init_machine,
 	.init_late      = imx6sl_init_late,
 	.dt_compat	= imx6sl_dt_compat,
+	.reserve     = imx6sl_reserve,
 	.restart	= mxc_restart,
-#ifdef CONFIG_IOHW_RECORD
-	.reserve	= iohwrec_reserve_buf,	
-#endif	
 MACHINE_END

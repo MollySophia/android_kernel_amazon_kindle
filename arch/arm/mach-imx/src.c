@@ -155,7 +155,7 @@ void __init imx_src_init(void)
 		m4_is_enabled = true;
 	else
 		m4_is_enabled = false;
-#ifndef CONFIG_LAB126_PRINTK_BUFFER
+#ifndef CONFIG_WARM_RESET
 	val &= ~(1 << BP_SRC_SCR_WARM_RESET_ENABLE);
 	writel_relaxed(val, src_base + SRC_SCR);
 #endif

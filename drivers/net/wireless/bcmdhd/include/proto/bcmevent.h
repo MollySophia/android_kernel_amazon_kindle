@@ -23,7 +23,7 @@
  *
  * Dependencies: proto/bcmeth.h
  *
- * $Id: bcmevent.h 491754 2014-07-17 13:56:43Z $
+ * $Id: bcmevent.h 505096 2014-09-26 12:49:04Z $
  *
  */
 
@@ -151,10 +151,8 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_IF		54	/* I/F change (for dongle host notification) */
 #define WLC_E_P2P_DISC_LISTEN_COMPLETE	55	/* listen state expires */
 #define WLC_E_RSSI		56	/* indicate RSSI change based on configured levels */
-/* PFN best network batching event, conflict/share with WLC_E_PFN_SCAN_COMPLETE */
-#define WLC_E_PFN_BEST_BATCHING     57
 #define WLC_E_PFN_SCAN_COMPLETE	57	/* PFN completed scan of network list */
-/* PFN best network batching event, conflict/share with WLC_E_PFN_SCAN_COMPLETE */
+/* PFN best network batching event, re-use obsolete WLC_E_PFN_SCAN_COMPLETE */
 #define WLC_E_PFN_BEST_BATCHING	57
 #define WLC_E_EXTLOG_MSG	58
 #define WLC_E_ACTION_FRAME      59	/* Action frame Rx */
@@ -201,7 +199,7 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_NATIVE			94	/* port-specific event and payload (e.g. NDIS) */
 #define WLC_E_PKTDELAY_IND		95	/* event for tx pkt delay suddently jump */
 #define WLC_E_PSTA_PRIMARY_INTF_IND	99	/* psta primary interface indication */
-#define WLC_E_NAN			100		/* NAN event */
+#define WLC_E_NAN			100     /* NAN event */
 #define WLC_E_BEACON_FRAME_RX		101
 #define WLC_E_SERVICE_FOUND		102	/* desired service found */
 #define WLC_E_GAS_FRAGMENT_RX		103	/* GAS fragment received */
@@ -215,6 +213,7 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_PROXD			109	/* Proximity Detection event */
 #define WLC_E_IBSS_COALESCE		110	/* IBSS Coalescing */
 #define WLC_E_AIBSS_TXFAIL		110	/* TXFAIL event for AIBSS, re using event 110 */
+#define WLC_E_BSS_LOAD			114	/* Inform host of beacon bss load */
 #define WLC_E_CSA_START_IND		121
 #define WLC_E_CSA_DONE_IND		122
 #define WLC_E_CSA_FAILURE_IND		123
@@ -222,6 +221,12 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_BSSID		125	/* to report change in BSSID while roaming */
 #define WLC_E_TX_STAT_ERROR		126	/* tx error indication */
 #define WLC_E_BCMC_CREDIT_SUPPORT	127	/* credit check for BCMC supported */
+#define WLC_E_BT_WIFI_HANDOVER_REQ	130	/* Handover Request Initiated */
+#define WLC_E_SPW_TXINHIBIT		131     /* Southpaw TxInhibit notification */
+#define WLC_E_FBT_AUTH_REQ_IND		132	/* FBT Authentication Request Indication */
+#define WLC_E_RSSI_LQM			133	/* Enhancement addition for WLC_E_RSSI */
+#define WLC_E_PFN_GSCAN_FULL_RESULT		134 /* Full probe/beacon (IEs etc) results */
+#define WLC_E_PFN_SWC		135 /* Significant change in rssi of bssids being tracked */
 #define WLC_E_RMC_EVENT			139	/* RMC event */
 #define WLC_E_LAST			140	/* highest val + 1 for range checking */
 
@@ -229,15 +234,10 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #error "WLC_E_LAST: Invalid value for last event; must be <= 140."
 #endif /* WLC_E_LAST */
 
+/* define an API for getting the string name of an event */
+extern const char *bcmevent_get_name(uint event_type);
 
-/* Table of event name strings for UIs and debugging dumps */
-typedef struct {
-	uint event;
-	const char *name;
-} bcmevent_name_t;
 
-extern const bcmevent_name_t	bcmevent_names[];
-extern const int		bcmevent_names_size;
 
 /* Event status codes */
 #define WLC_E_STATUS_SUCCESS		0	/* operation was successful */
@@ -256,6 +256,8 @@ extern const int		bcmevent_names_size;
 #define WLC_E_STATUS_NOCHANS		13	/* no allowable channels to scan */
 #define WLC_E_STATUS_CS_ABORT		15	/* abort channel select */
 #define WLC_E_STATUS_ERROR		16	/* request failed due to error */
+#define WLC_E_STATUS_INVALID 0xff  /* Invalid status code to init variables. */
+
 
 /* roam reason codes */
 #define WLC_E_REASON_INITIAL_ASSOC	0	/* initial assoc */
@@ -271,7 +273,9 @@ extern const int		bcmevent_names_size;
 #define WLC_E_REASON_BETTER_AP		8	/* roamed due to finding better AP */
 #define WLC_E_REASON_MINTXRATE		9	/* roamed because at mintxrate for too long */
 #define WLC_E_REASON_TXFAIL		10	/* We can hear AP, but AP can't hear us */
-#define WLC_E_REASON_REQUESTED_ROAM	11	/* roamed due to BSS Mgmt Transition REQ by AP */
+/* retained for precommit auto-merging errors; remove once all branches are synced */
+#define WLC_E_REASON_REQUESTED_ROAM	11
+#define WLC_E_REASON_BSSTRANS_REQ	11	/* roamed due to BSS Transition request by AP */
 
 /* prune reason codes */
 #define WLC_E_PRUNE_ENCR_MISMATCH	1	/* encryption mismatch */
@@ -369,6 +373,11 @@ typedef struct wl_event_data_rssi {
 #define WLC_E_TDLS_PEER_CONNECTED		1
 #define WLC_E_TDLS_PEER_DISCONNECTED	2
 
+/* reason codes for WLC_E_RMC_EVENT event */
+#define WLC_E_REASON_RMC_NONE		0
+#define WLC_E_REASON_RMC_AR_LOST		1
+#define WLC_E_REASON_RMC_AR_NO_ACK		2
+
 #ifdef WLTDLS
 /* TDLS Action Category code */
 #define TDLS_AF_CATEGORY		12
@@ -383,11 +392,6 @@ typedef struct wl_event_data_rssi {
 #define WLAN_TDLS_SET_PROBE_WFD_IE		 11
 #define WLAN_TDLS_SET_SETUP_WFD_IE		 12
 #endif
-
-/* reason codes for WLC_E_RMC_EVENT event */
-#define WLC_E_REASON_RMC_NONE		0
-#define WLC_E_REASON_RMC_AR_LOST		1
-#define WLC_E_REASON_RMC_AR_NO_ACK		2
 
 
 /* GAS event data */
@@ -480,6 +484,7 @@ typedef struct wl_intfer_event {
 typedef struct wl_psta_primary_intf_event {
 	struct ether_addr prim_ea;	/* primary intf ether addr */
 } wl_psta_primary_intf_event_t;
+
 
 /*  **********  NAN protocol events/subevents  ********** */
 #define NAN_EVENT_BUFFER_SIZE 512 /* max size */

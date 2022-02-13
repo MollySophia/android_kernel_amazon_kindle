@@ -21,7 +21,11 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_cfg80211.h 490613 2014-07-11 05:23:34Z $
+ * $Id: wl_cfg80211.h 505096 2014-09-26 12:49:04Z $
+ */
+
+/**
+ * Older Linux versions support the 'iw' interface, more recent ones the 'cfg80211' interface.
  */
 
 #ifndef _wl_cfg80211_h_
@@ -64,6 +68,12 @@ struct wl_ibss;
 
 #define CFG80211_ERROR_TEXT		"CFG80211-ERROR) "
 
+#define MAX_WAIT_TIME 1500
+#define DNGL_FUNC(func, parameters) func parameters;
+
+#define PM_BLOCK 1
+#define PM_ENABLE 0
+
 #if defined(DHD_DEBUG)
 #define	WL_ERR(args)									\
 do {										\
@@ -82,16 +92,19 @@ do {										\
 } while (0)
 #endif /* defined(DHD_DEBUG) */
 
-#ifdef WL_INFO
-#undef WL_INFO
+#ifdef WL_INFORM
+#undef WL_INFORM
 #endif
-#define	WL_INFO(args)									\
+
+#define	WL_INFORM(args)									\
 do {										\
 	if (wl_dbg_level & WL_DBG_INFO) {				\
 			printk(KERN_INFO "CFG80211-INFO) %s : ", __func__);	\
 			printk args;						\
 		}								\
 } while (0)
+
+
 #ifdef WL_SCAN
 #undef WL_SCAN
 #endif
@@ -399,6 +412,15 @@ struct escan_info {
 	struct net_device *ndev;
 };
 
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+#define BUF_OVERFLOW_MGMT_COUNT 3
+typedef struct {
+	int RSSI;
+	int length;
+	struct ether_addr BSSID;
+} removal_element_t;
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
+
 struct ap_info {
 /* Structure to hold WPS, WPA IEs for a AP */
 	u8   probe_res_ie[VNDR_IES_MAX_BUF_LEN];
@@ -526,7 +548,7 @@ struct bcm_cfg80211 {
 	bool pwr_save;
 	bool roam_on;		/* on/off switch for self-roaming */
 	bool scan_tried;	/* indicates if first scan attempted */
-#if defined(BCMSDIO)
+#if defined(BCMSDIO) || defined(BCMPCIE)
 	bool wlfc_on;
 #endif 
 	bool vsdb_mode;
@@ -576,13 +598,23 @@ struct bcm_cfg80211 {
 	int ibss_vsie_len;
 	u32 rmc_event_pid;
 	u32 rmc_event_seq;
-	bool roam_offload;
+#ifdef WLAIBSS_MCHAN
+	struct ether_addr ibss_if_addr;
+	bcm_struct_cfgdev *ibss_cfgdev; /* For AIBSS */
+#endif /* WLAIBSS_MCHAN */
+	bcm_struct_cfgdev *bss_cfgdev;  /* For DUAL STA/STA+AP */
+	s32 cfgdev_bssidx;
+	bool bss_pending_op;		/* indicate where there is a pending IF operation */
+	int roam_offload;
+	bool nan_running;
+#ifdef P2PLISTEN_AP_SAMECHN
+	bool p2p_resp_apchn_status;
+#endif /* P2PLISTEN_AP_SAMECHN */
 #ifdef WLTDLS
 	u8 *tdls_mgmt_frame;
 	u32 tdls_mgmt_frame_len;
 	s32 tdls_mgmt_freq;
 #endif /* WLTDLS */
-	bool nan_running;
 };
 
 
@@ -798,9 +830,11 @@ wl_get_netinfo_by_netdev(struct bcm_cfg80211 *cfg, struct net_device *ndev)
 
 #if defined(WL_CFG80211_P2P_DEV_IF)
 #define ndev_to_cfgdev(ndev)	ndev_to_wdev(ndev)
+#define cfgdev_to_ndev(cfgdev)  cfgdev ? (cfgdev->netdev) : NULL
 #define discover_cfgdev(cfgdev, cfg) (cfgdev->iftype == NL80211_IFTYPE_P2P_DEVICE)
 #else
 #define ndev_to_cfgdev(ndev)	(ndev)
+#define cfgdev_to_ndev(cfgdev)	(cfgdev)
 #define discover_cfgdev(cfgdev, cfg) (cfgdev == cfg->p2p_net)
 #endif /* WL_CFG80211_P2P_DEV_IF */
 
@@ -880,10 +914,14 @@ extern s32 wl_cfg80211_get_p2p_noa(struct net_device *net, char* buf, int len);
 extern s32 wl_cfg80211_set_wps_p2p_ie(struct net_device *net, char *buf, int len,
 	enum wl_management_type type);
 extern s32 wl_cfg80211_set_p2p_ps(struct net_device *net, char* buf, int len);
+#ifdef P2PLISTEN_AP_SAMECHN
+extern s32 wl_cfg80211_set_p2p_resp_ap_chn(struct net_device *net, s32 enable);
+#endif /* P2PLISTEN_AP_SAMECHN */
 
 /* btcoex functions */
 void* wl_cfg80211_btcoex_init(struct net_device *ndev);
 void wl_cfg80211_btcoex_deinit(void);
+
 
 #ifdef WL_SUPPORT_AUTO_CHANNEL
 #define CHANSPEC_BUF_SIZE	1024
@@ -907,7 +945,7 @@ int wl_cfg80211_do_driver_init(struct net_device *net);
 void wl_cfg80211_enable_trace(bool set, u32 level);
 extern s32 wl_update_wiphybands(struct bcm_cfg80211 *cfg, bool notify);
 extern s32 wl_cfg80211_if_is_group_owner(void);
-extern chanspec_t wl_chspec_host_to_driver(chanspec_t chanspec);
+extern  chanspec_t wl_chspec_host_to_driver(chanspec_t chanspec);
 extern chanspec_t wl_ch_host_to_driver(u16 channel);
 extern s32 wl_set_tx_power(struct net_device *dev,
 	enum nl80211_tx_power_setting type, s32 dbm);
@@ -930,7 +968,6 @@ extern void wl_cfg80211_update_power_mode(struct net_device *dev);
 #define wl_escan_print_sync_id(a, b, c)
 #define wl_escan_increment_sync_id(a, b)
 #define wl_escan_init_sync_id(a)
-
 extern void wl_cfg80211_ibss_vsie_set_buffer(vndr_ie_setbuf_t *ibss_vsie, int ibss_vsie_len);
 extern s32 wl_cfg80211_ibss_vsie_delete(struct net_device *dev);
 extern void wl_cfg80211_set_rmc_pid(int pid);
@@ -940,16 +977,32 @@ extern void wl_cfg80211_set_rmc_pid(int pid);
 extern u8 wl_get_action_category(void *frame, u32 frame_len);
 extern int wl_get_public_action(void *frame, u32 frame_len, u8 *ret_action);
 
-extern int wl_cfg80211_enable_roam_offload(struct net_device *dev, bool enable);
+#ifdef WL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST
+struct net_device *wl_cfg80211_get_remain_on_channel_ndev(struct bcm_cfg80211 *cfg);
+#endif /* WL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST */
+
+#ifdef WL_SUPPORT_ACS
+#define ACS_MSRMNT_DELAY 1000 /* dump_obss delay in ms */
+#define IOCTL_RETRY_COUNT 5
+#define CHAN_NOISE_DUMMY -80
+#define OBSS_TOKEN_IDX 15
+#define IBSS_TOKEN_IDX 15
+#define TX_TOKEN_IDX 14
+#define CTG_TOKEN_IDX 13
+#define PKT_TOKEN_IDX 15
+#define IDLE_TOKEN_IDX 12
+#endif /* WL_SUPPORT_ACS */
+
+extern int wl_cfg80211_get_ioctl_version(void);
+extern int wl_cfg80211_enable_roam_offload(struct net_device *dev, int enable);
+
 #ifdef WL_NAN
 extern int wl_cfg80211_nan_cmd_handler(struct net_device *ndev, char *cmd,
 	int cmd_len);
 #endif /* WL_NAN */
 
-#ifdef WL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST
-struct net_device *wl_cfg80211_get_remain_on_channel_ndev(struct bcm_cfg80211 *cfg);
-#endif /* WL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST */
+#ifdef WL_CFG80211_P2P_DEV_IF
+extern void wl_cfg80211_del_p2p_wdev(void);
+#endif /* WL_CFG80211_P2P_DEV_IF */
 
-extern int wl_cfg80211_get_ioctl_version(void);
-
-#endif				/* _wl_cfg80211_h_ */
+#endif /* _wl_cfg80211_h_ */

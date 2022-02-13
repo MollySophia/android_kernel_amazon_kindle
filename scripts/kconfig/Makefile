@@ -102,6 +102,11 @@ else
 endif
 
 %_defconfig: $(obj)/conf
+ifneq ("$(wildcard $(objtree)/custom.config)","")
+	$(Q)install -D $(srctree)/arch/$(SRCARCH)/configs/$@ $(objtree)/arch/$(SRCARCH)/configs/.config
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/kconfig/merge_config.sh -m -O $(objtree)/arch/$(SRCARCH)/configs $(objtree)/arch/$(SRCARCH)/configs/.config $(objtree)/custom.config
+	$(Q)mv $(objtree)/arch/$(SRCARCH)/configs/.config $(objtree)/arch/$(SRCARCH)/configs/$@
+endif
 	$(Q)$< --defconfig=arch/$(SRCARCH)/configs/$@ $(Kconfig)
 
 # Help text used by make help

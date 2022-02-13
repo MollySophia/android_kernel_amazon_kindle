@@ -272,7 +272,7 @@ static int wifi_plat_dev_drv_probe(struct platform_device *pdev)
 		resource = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "bcm4329_wlan_irq");
 	if (resource) {
 		adapter->irq_num = resource->start;
-		adapter->intr_flags = resource->flags;
+		adapter->intr_flags = resource->flags & IRQF_TRIGGER_MASK;
 	}
 
 #ifdef CONFIG_DTS
@@ -316,8 +316,13 @@ static int wifi_plat_dev_drv_remove(struct platform_device *pdev)
 	ASSERT(dhd_wifi_platdata->num_adapters == 1);
 	adapter = &dhd_wifi_platdata->adapters[0];
 	if (is_power_on) {
+#ifdef BCMPCIE
+		wifi_platform_bus_enumerate(adapter, FALSE);
+		wifi_platform_set_power(adapter, FALSE, WIFI_TURNOFF_DELAY);
+#else
 		wifi_platform_set_power(adapter, FALSE, WIFI_TURNOFF_DELAY);
 		wifi_platform_bus_enumerate(adapter, FALSE);
+#endif /* BCMPCIE */
 	}
 
 #ifdef CONFIG_DTS
@@ -445,7 +450,7 @@ static int wifi_ctrlfunc_register_drv(void)
 		adapter->wifi_plat_data = (void *)&dhd_wlan_control;
 		resource = &dhd_wlan_resources;
 		adapter->irq_num = resource->start;
-		adapter->intr_flags = resource->flags;
+		adapter->intr_flags = resource->flags & IRQF_TRIGGER_MASK;
 		wifi_plat_dev_probe_ret = dhd_wifi_platform_load();
 	}
 #endif /* !defined(CONFIG_DTS) */
@@ -461,12 +466,12 @@ static int wifi_ctrlfunc_register_drv(void)
 
 void wifi_ctrlfunc_unregister_drv(void)
 {
-	struct device *dev1, *dev2;
 
 #ifdef CONFIG_DTS
 	DHD_ERROR(("unregister wifi platform drivers\n"));
 	platform_driver_unregister(&wifi_platform_dev_driver);
 #else
+	struct device *dev1, *dev2;
 	dev1 = bus_find_device(&platform_bus_type, NULL, WIFI_PLAT_NAME, wifi_platdev_match);
 	dev2 = bus_find_device(&platform_bus_type, NULL, WIFI_PLAT_NAME2, wifi_platdev_match);
 	if (!dts_enabled)
@@ -566,7 +571,77 @@ int dhd_wifi_platform_register_drv(void)
 static int dhd_wifi_platform_load_pcie(void)
 {
 	int err = 0;
-	err = dhd_bus_register();
+	int i;
+	wifi_adapter_info_t *adapter;
+
+	BCM_REFERENCE(i);
+	BCM_REFERENCE(adapter);
+
+	if (dhd_wifi_platdata == NULL) {
+		err = dhd_bus_register();
+	} else {
+		if (dhd_download_fw_on_driverload) {
+			/* power up all adapters */
+			for (i = 0; i < dhd_wifi_platdata->num_adapters; i++) {
+				int retry = POWERUP_MAX_RETRY;
+				adapter = &dhd_wifi_platdata->adapters[i];
+
+				DHD_ERROR(("Power-up adapter '%s'\n", adapter->name));
+				DHD_INFO((" - irq %d [flags %d], firmware: %s, nvram: %s\n",
+					adapter->irq_num, adapter->intr_flags, adapter->fw_path,
+					adapter->nv_path));
+				DHD_INFO((" - bus type %d, bus num %d, slot num %d\n\n",
+					adapter->bus_type, adapter->bus_num, adapter->slot_num));
+
+				do {
+					err = wifi_platform_set_power(adapter,
+						TRUE, WIFI_TURNON_DELAY);
+					if (err) {
+						DHD_ERROR(("failed to power up %s,"
+							" %d retry left\n",
+							adapter->name, retry));
+						/* WL_REG_ON state unknown, Power off forcely */
+						wifi_platform_set_power(adapter,
+							FALSE, WIFI_TURNOFF_DELAY);
+						continue;
+					} else {
+						err = wifi_platform_bus_enumerate(adapter, TRUE);
+						if (err) {
+							DHD_ERROR(("failed to enumerate bus %s, "
+								"%d retry left\n",
+								adapter->name, retry));
+							wifi_platform_set_power(adapter, FALSE,
+								WIFI_TURNOFF_DELAY);
+						} else {
+							break;
+						}
+					}
+				} while (retry--);
+
+				if (!retry) {
+					DHD_ERROR(("failed to power up %s, max retry reached**\n",
+						adapter->name));
+					return -ENODEV;
+				}
+			}
+		}
+
+		err = dhd_bus_register();
+
+		if (err) {
+			DHD_ERROR(("%s: pcie_register_driver failed\n", __FUNCTION__));
+			if (dhd_download_fw_on_driverload) {
+				/* power down all adapters */
+				for (i = 0; i < dhd_wifi_platdata->num_adapters; i++) {
+					adapter = &dhd_wifi_platdata->adapters[i];
+					wifi_platform_bus_enumerate(adapter, FALSE);
+					wifi_platform_set_power(adapter,
+						FALSE, WIFI_TURNOFF_DELAY);
+				}
+			}
+		}
+	}
+
 	return err;
 }
 #else
@@ -609,7 +684,7 @@ static int dhd_wifi_platform_load_sdio(void)
 		!(dhd_watchdog_prio >= 0 && dhd_dpc_prio >= 0 && dhd_deferred_tx))
 		return -EINVAL;
 
-#if defined(BCMLXSDMMC)
+#if !defined(CONFIG_LAB126) && defined(BCMLXSDMMC)
 	if (dhd_wifi_platdata == NULL) {
 		DHD_ERROR(("DHD wifi platform data is required for Android build\n"));
 		return -EINVAL;
@@ -647,9 +722,9 @@ static int dhd_wifi_platform_load_sdio(void)
 				wifi_platform_bus_enumerate(adapter, TRUE);
 				err = 0;
 			}
+
 			if (down_timeout(&dhd_chipup_sem, msecs_to_jiffies(POWERUP_WAIT_MS)) == 0) {
 				dhd_bus_unreg_sdio_notify();
-				DHD_ERROR(("%s, chip_up sem got\n", adapter->name));
 				chip_up = TRUE;
 				break;
 			}
@@ -686,7 +761,6 @@ static int dhd_wifi_platform_load_sdio(void)
 		dhd_bus_unregister();
 		goto fail;
 	}
-	DHD_ERROR(("dhd_wifi_platform_load_sdio  %s, return:%d\n", adapter->name, err));
 
 	return err;
 

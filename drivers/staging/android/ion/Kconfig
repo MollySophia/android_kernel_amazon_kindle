@@ -38,4 +38,3 @@ config ION_MXC
 	depends on ARCH_MXC && ION
 	help
 	  Choose this option if you wish to use ion on imx platform.
-

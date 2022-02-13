@@ -135,8 +135,7 @@ dtb-$(CONFIG_ARCH_MXC) += \
 	imx6q-sabresd-hdcp.dtb \
 	imx6q-sabresd-ldo.dtb \
 	imx6q-sbc6x.dtb \
-	imx6sl-wario.dtb \
-	imx6sl-fox.dtb \
+	imx6sl-abc123.dtb \
 	imx6sl-heisenberg.dtb \
 	imx6sx-17x17-arm2.dtb \
 	imx6sx-17x17-arm2-ldo.dtb \

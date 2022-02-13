@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh_sdmmc_linux.c 434724 2013-11-07 05:38:43Z $
+ * $Id: bcmsdh_sdmmc_linux.c 434777 2013-11-07 09:30:27Z $
  */
 
 #include <typedefs.h>
@@ -96,6 +96,14 @@ MODULE_PARM_DESC(clockoverride, "SDIO card clock override");
 
 extern volatile bool dhd_mmc_suspend;
 
+#ifdef CONFIG_LAB126
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+extern int brcm_wlan_power(int on);
+extern int wifi_card_enable(void);
+extern int wifi_card_disable(void);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0) */
+#endif /* CONFIG_LAB126 */
+
 static int sdioh_probe(struct sdio_func *func)
 {
 	int host_idx = func->card->host->index;
@@ -148,6 +156,9 @@ static void sdioh_remove(struct sdio_func *func)
 {
 	sdioh_info_t *sdioh;
 	osl_t *osh;
+#ifdef CONFIG_LAB126
+	int ret;
+#endif /* CONFIG_LAB126 */
 
 	sdioh = sdio_get_drvdata(func);
 	if (sdioh == NULL) {
@@ -156,8 +167,17 @@ static void sdioh_remove(struct sdio_func *func)
 	}
 
 	osh = sdioh->osh;
+#ifdef CONFIG_LAB126
+	ret = bcmsdh_remove(sdioh->bcmsdh);
+	if (ret)
+		pr_err("%s: bcmsdh_remove ret=%d, skip sdioh_detach\n",
+		       __func__, ret);
+	else
+		sdioh_detach(osh, sdioh);
+#else /* !CONFIG_LAB126 */
 	bcmsdh_remove(sdioh->bcmsdh);
 	sdioh_detach(osh, sdioh);
+#endif /* CONFIG_LAB126 */
 	osl_detach(osh);
 }
 
@@ -222,8 +242,13 @@ static int bcmsdh_sdmmc_suspend(struct device *pdev)
 	int err;
 	sdioh_info_t *sdioh;
 	struct sdio_func *func = dev_to_sdio_func(pdev);
+#ifndef CONFIG_LAB126
 	mmc_pm_flag_t sdio_flags;
+#endif /* !CONFIG_LAB126 */
 
+#ifdef CONFIG_LAB126
+	pr_info("%s: pdev=%p FN:%d\n", __func__, pdev, func ? func->num: -1);
+#endif /* CONFIG_LAB126 */
 	sd_err(("%s Enter\n", __FUNCTION__));
 	if (func->num != 2)
 		return 0;
@@ -233,6 +258,23 @@ static int bcmsdh_sdmmc_suspend(struct device *pdev)
 	if (err)
 		return err;
 
+#ifdef CONFIG_LAB126
+	err = sdioh_stop(sdioh);
+	if (err) {
+                printk(KERN_ERR "err froms sdioh_stop: %d\n", err);
+                return err;
+        }
+
+	/* Disable card */
+	sdio_claim_host(func);
+	err = sdio_disable_func(func);
+	sdio_release_host(func);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+	brcm_wlan_power(0);
+	brcm_wlan_power(1);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0) */
+#else /* !CONFIG_LAB126 */
 	sdio_flags = sdio_get_host_pm_caps(func);
 	if (!(sdio_flags & MMC_PM_KEEP_POWER)) {
 		sd_err(("%s: can't keep power while host is suspended\n", __FUNCTION__));
@@ -250,32 +292,87 @@ static int bcmsdh_sdmmc_suspend(struct device *pdev)
 #endif 
 	dhd_mmc_suspend = TRUE;
 	smp_mb();
+#endif /* CONFIG_LAB126 */
 
 	return 0;
 }
+
+#ifdef CONFIG_LAB126
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+static int bcmsdh_sdmmc_suspend_late(struct device *pdev)
+{
+	struct sdio_func *func = dev_to_sdio_func(pdev);
+
+	pr_info("%s: pdev=%p FN:%d\n", __func__, pdev, func ? func->num: -1);
+
+	/* FN1 is called last */
+	if (func->num == 1)
+		wifi_card_disable();
+
+	return 0;
+}
+
+static int bcmsdh_sdmmc_resume_early(struct device *pdev)
+{
+	struct sdio_func *func = dev_to_sdio_func(pdev);
+
+	pr_info("%s: pdev=%p FN:%d\n", __func__, pdev, func ? func->num: -1);
+
+	/* FN1 is called first */
+	if (func->num == 1)
+		wifi_card_enable();
+
+	return 0;
+}
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0) */
+#endif /* CONFIG_LAB126 */
 
 static int bcmsdh_sdmmc_resume(struct device *pdev)
 {
 	sdioh_info_t *sdioh;
 	struct sdio_func *func = dev_to_sdio_func(pdev);
+#ifdef CONFIG_LAB126
+	int ret = 0;
 
+	pr_info("%s: pdev=%p FN:%d\n", __func__, pdev, func ? func->num: -1);
+#endif /* !CONFIG_LAB126 */
 	sd_err(("%s Enter\n", __FUNCTION__));
 	if (func->num != 2)
 		return 0;
 
 	sdioh = sdio_get_drvdata(func);
+
+#ifdef CONFIG_LAB126
+	ret = sdioh_probe(func);
+	if (ret) {
+		printk(KERN_ERR "sdioh_probe, err :%d\n", ret);
+		return ret;
+	}
+	ret = sdioh_start(sdioh, 0);
+	if (ret) {
+		printk(KERN_ERR "sdioh_start, ret: %d\n", ret);
+		return ret;
+	}
+#else /* !CONFIG_LAB126 */
 	dhd_mmc_suspend = FALSE;
 #if defined(OOB_INTR_ONLY)
 	bcmsdh_resume(sdioh->bcmsdh);
 #endif 
 
 	smp_mb();
+#endif /* CONFIG_LAB126 */
 	return 0;
 }
 
 static const struct dev_pm_ops bcmsdh_sdmmc_pm_ops = {
 	.suspend	= bcmsdh_sdmmc_suspend,
 	.resume		= bcmsdh_sdmmc_resume,
+#ifdef CONFIG_LAB126
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
+	.suspend_late	= bcmsdh_sdmmc_suspend_late,
+	.resume_early	= bcmsdh_sdmmc_resume_early,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0) */
+#endif /* CONFIG_LAB126 */
 };
 #endif  /* (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) && defined(CONFIG_PM) */
 
@@ -288,11 +385,9 @@ static int dummy_probe(struct sdio_func *func,
 	if (func && (func->num != 2)) {
 		return 0;
 	}
-	printk(KERN_ERR "dummy_probe enter 2\n");
 
 	if (notify_semaphore)
 		up(notify_semaphore);
-	printk(KERN_ERR "dummy_probe enter 3\n");
 	return 0;
 }
 

@@ -87,7 +87,7 @@ static void interpret_pa(u32 entry,  etype ttbEtype, u32* pa_start, u32* pa_end)
 static u32 vaEntry2Pa(u32 mva, u32 paStart, etype etype);
 static u32 frameSize(etype entry_type);
 
-bool getPaWatchedDb(u32* ptr, u32 deb, u32* ptr_pa) {
+bool notrace getPaWatchedDb(u32* ptr, u32 deb, u32* ptr_pa) {
 	u32 *ttb1Entry, *ttb0Entry;
 	etype ttb1Etype, ttb0Etype;
 	u32 sctlr, n, mva, ttb1Va_start, ttb0Va_start;
@@ -112,7 +112,7 @@ bool getPaWatchedDb(u32* ptr, u32 deb, u32* ptr_pa) {
 EXPORT_SYMBOL(getPaWatchedDb); 
 
 
-static u32* va2Mva(u32 va){
+static u32* notrace va2Mva(u32 va){
 	//Fast Context Switch Extention
 	//B3.2.1 B3-152 B3.13.2
 
@@ -129,7 +129,7 @@ static u32* va2Mva(u32 va){
 	return mva;
 }
 
-static void interpret_pa(u32 entry,  etype ttbEtype, u32* pa_start, u32* pa_end){
+static void notrace interpret_pa(u32 entry,  etype ttbEtype, u32* pa_start, u32* pa_end){
 	u32 frame_size;
 	
 	if(ttbEtype==SECTION || ttbEtype==SUPERSECTION){
@@ -179,7 +179,7 @@ static void interpret_pa(u32 entry,  etype ttbEtype, u32* pa_start, u32* pa_end)
 }
 
 
-static u32 frameSize(etype entry_type){
+static u32 notrace frameSize(etype entry_type){
 	switch(entry_type){
 	case SECTION:
 		return 0x100000;
@@ -194,7 +194,7 @@ static u32 frameSize(etype entry_type){
 	}
 }
 
-static etype ttbFindVa(u32 va, u32 ttb, u32 ttbcr, u32 sctlr, u32 table_bytes, u32 n, u32** theEntry, u32* theVa_start, u32* sidx, u32* tidx){
+static etype notrace ttbFindVa(u32 va, u32 ttb, u32 ttbcr, u32 sctlr, u32 table_bytes, u32 n, u32** theEntry, u32* theVa_start, u32* sidx, u32* tidx){
 	u32 entry_type_bits, page_type_bits, sup;
 	u32 *table_pa = GET_BITS(31, 14-n, ttb)<<(14-n);
 	u32* entry_va;
@@ -256,7 +256,7 @@ static etype ttbFindVa(u32 va, u32 ttb, u32 ttbcr, u32 sctlr, u32 table_bytes, u
 }
 
 
-static void va2Entry(u32 va, u32** ttb1Entry, etype* ttb1Etype, u32* ttb1Va_start, u32** ttb0Entry, etype* ttb0Etype, u32* ttb0Va_start, u32* theSctlr, u32* theN, u32* sidx1, u32* tidx1, u32* sidx0, u32* tidx0){
+static void notrace va2Entry(u32 va, u32** ttb1Entry, etype* ttb1Etype, u32* ttb1Va_start, u32** ttb0Entry, etype* ttb0Etype, u32* ttb0Va_start, u32* theSctlr, u32* theN, u32* sidx1, u32* tidx1, u32* sidx0, u32* tidx0){
 	u32 ttbcr = read_ttbcr();
 	u32 n =  TTBCR_N(ttbcr);
 	u32 ttbr_bytes = (16*1024)>>n;
@@ -282,7 +282,7 @@ static void va2Entry(u32 va, u32** ttb1Entry, etype* ttb1Etype, u32* ttb1Va_star
 	*theN = n;
 }
 
-static u32 va2pa(u32* entry, etype etype, u32 va){
+static u32 notrace va2pa(u32* entry, etype etype, u32 va){
 	u32 pa;
 
 	switch(etype){
@@ -310,7 +310,7 @@ static u32 va2pa(u32* entry, etype etype, u32 va){
 	return pa;
 }
 
-static u32 vaEntry2Pa(u32 mva, u32 paStart, etype etype){
+static u32 notrace vaEntry2Pa(u32 mva, u32 paStart, etype etype){
 	u32 offset=0;
 
 	switch (etype){
@@ -539,7 +539,7 @@ static DEFINE_SPINLOCK(rec_lock);
 
 extern void wdg_prep(void);
 
-static inline void iohwbuf_write(u32 pa, u32 value, u32 pc) {
+static void notrace iohwbuf_write(u32 pa, u32 value, u32 pc) {
 	static volatile unsigned int iohwrec_cpu = UINT_MAX;
 
 	if (unlikely(io_record_table == NULL))
@@ -638,7 +638,7 @@ void __init setup_iohwrec_proc() {
     }
 }
 
-void iohw_record(const volatile void* va, u32 val, u32 pc) {
+void notrace iohw_record(const volatile void* va, u32 val, u32 pc) {
 	static volatile int lastHWBlock = 0;
 	u32 pa = 0;
 	static int cnt = 0;

@@ -29,6 +29,10 @@
 #include <asm/mach-types.h>
 #include <asm/hardware/cache-l2x0.h>
 
+#ifdef CONFIG_BD7181X_POWER
+#include <linux/mfd/bd7181x.h>
+#endif
+
 #include "common.h"
 #include "hardware.h"
 #include "mx6.h"
@@ -74,8 +78,16 @@ void set_boot_mode(u32 val)
 {
 	u32 reg;
 	void __iomem *addr;
-	
+
 	pr_err("%s: mode: %x\n", __func__,val);
+
+#ifdef CONFIG_BD7181X_POWER
+	/* set boot mode to ROHM PMIC register */
+	int ret = bd7181x_set_boot_mode(val);
+	if (ret < 0) {
+		pr_err("%s: writing boot mode to pmic register failed: %d\n", __func__, ret);
+	}
+#else
 
 	addr = ioremap(MX6_SNVS_BASE_ADDR, SNVS_SIZE);
 	if (!addr) {
@@ -93,12 +105,18 @@ void set_boot_mode(u32 val)
 	__iormb();
 
 	iounmap(addr);
+#endif
 }
 
 int __init get_aboot_mode(void)
 {
 	u32 reg;
 	void __iomem *addr;
+
+#ifdef CONFIG_BD7181X_POWER
+	/* get boot mode from ROHM PMIC register */
+	return bd7181x_get_boot_mode();
+#else
 
 	addr = ioremap(MX6_SNVS_BASE_ADDR, SNVS_SIZE);
 	if (!addr) {
@@ -112,6 +130,7 @@ int __init get_aboot_mode(void)
 	iounmap(addr);
 
 	return reg;
+#endif
 }
 
 int __init get_imx_reset_reason(void)

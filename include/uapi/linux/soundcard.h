@@ -403,7 +403,7 @@ struct sysex_info {
 #define    CTL_TREMOLO_DEPTH		0x5c
 #define    CTL_CHORUS_DEPTH		0x5d
 #define    CTL_DETUNE_DEPTH		0x5e
-#define    CTL_CELESTE_DEPTH		0x5e	/* Alias for the above one */
+#define    CTL_abc123_DEPTH		0x5e	/* Alias for the above one */
 #define    CTL_PHASER_DEPTH		0x5f
 #define    CTL_DATA_INCREMENT		0x60
 #define    CTL_DATA_DECREMENT		0x61

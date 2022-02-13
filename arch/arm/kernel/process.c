@@ -230,6 +230,11 @@ void machine_power_off(void)
 {
 	smp_send_stop();
 
+#ifdef CONFIG_BD7181X_POWER
+		/* set power off flg in ROHM PMIC register */
+		bd7181x_set_poweroff_flag();
+#endif
+
 	if (pm_power_off)
 		pm_power_off();
 }

@@ -29,17 +29,9 @@ config BCMDHD_FW_PATH
 config BCMDHD_NVRAM_PATH
 	depends on BCMDHD
 	string "NVRAM path"
-	default "/system/etc/wifi/bcmdhd.cal"
+	default "/system/vendor/firmware/nvram.txt"
 	---help---
 	  Path to the calibration file.
-
-config BCMDHD_WEXT
-	bool "Enable WEXT support"
-	depends on BCMDHD && CFG80211 = n
-	select WIRELESS_EXT
-	select WEXT_PRIV
-	help
-	  Enables WEXT support
 
 config DHD_USE_STATIC_BUF
 	bool "Enable memory preallocation"

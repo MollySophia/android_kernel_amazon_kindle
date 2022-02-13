@@ -149,7 +149,6 @@
 	bus-width = <4>;
 	fsl,delay-line;
 	status = "okay";
-
 };
 
 &usdhc2 { /*emmc*/

@@ -30,7 +30,6 @@
 #endif
 #include <linux/if.h>
 #include <linux/of.h>
-
 #include <linux/of_gpio.h>
 
 #include <linux/fcntl.h>
@@ -507,6 +506,7 @@ int brcm_wlan_power(int on)
 #endif
 	return 0;
 }
+EXPORT_SYMBOL(brcm_wlan_power);
 
 #ifdef CONFIG_LAB126
 extern struct sdhci_host *mmc1_host;

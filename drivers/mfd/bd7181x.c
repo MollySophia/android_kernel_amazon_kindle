@@ -372,48 +372,207 @@ static int bd7181x_i2c_remove(struct i2c_client *i2c)
 	return 0;
 }
 #ifdef CONFIG_PM_SLEEP
-/**@brief suspend bd7181x i2c device
- * @param dev rtc device of system
+
+/*
+ * helper i2c write register routine to set up an i2c msg and send it out
+ * without locking intentionally.
+ */
+static inline int bd7181x_write_i2c_reg(struct i2c_client *client, int reg, int val)
+{
+	u8 temp_buf[2] = { reg, val };
+	int ret;
+	struct i2c_msg msg = {
+		.addr = client->addr,
+		.flags = 0,
+		.len = 2,
+		.buf = temp_buf,
+	};
+
+	ret = __i2c_transfer(client->adapter, &msg, 1);
+	return (ret == 1)? 0 : -EBUSY;
+}
+
+/*
+ * helper i2c read register routine. Similar to the write reg. routine.
+ * This is done without locking intentionally.
+ */
+static inline int bd7181x_read_i2c_reg(struct i2c_client *client, u8 reg, u8 *val)
+{
+	int ret;
+	struct i2c_msg msg1 = {
+		.addr = client->addr,
+		.flags = 0,
+		.len = 1,
+		.buf = &reg,
+	};
+	struct i2c_msg msg2 = {
+		.addr = client->addr,
+		.flags = I2C_M_RD,
+		.len = 1,
+		.buf = val,
+	};
+	struct i2c_msg msgs[] = { msg1, msg2 };
+
+	ret = __i2c_transfer(client->adapter, msgs, 2);
+	return (ret == 2)? 0 : -EBUSY;
+}
+
+/*
+ * Function to enter PMIC test mode.
+ * This requires writing 3 separate values to the
+ * BD7181X_REG_TEST_MODE register. If any of these failed,
+ * we will not be in test mode. No clean up is required.
+ */
+static int bd7181x_enter_test_mode(struct i2c_client *client)
+{
+	int ret;
+
+	ret = bd7181x_write_i2c_reg(client, BD7181X_REG_TEST_MODE,
+				    BD7181X_TEST_REG_ACCESS_AREA_1);
+	if (ret)
+		goto out;
+	ret = bd7181x_write_i2c_reg(client, BD7181X_REG_TEST_MODE,
+				    BD7181X_TEST_REG_ACCESS_AREA_2);
+	if (ret)
+		goto out;
+	ret = bd7181x_write_i2c_reg(client, BD7181X_REG_TEST_MODE,
+				    BD7181X_TEST_REG_ACCESS_AREA_3);
+out:
+	return ret;
+}
+
+/*
+ * This function will be used to perform the workarounds suggested by ROHM
+ * to be able to suspend and resume the SOC. The suggested sequence
+ * requires 5+ I2C writes and must be conducted under PMIC test mode.
+ * The sequence goes like this:
+ * - Enter the PMIC test mode
+ * - workaround 1: adjust the reference voltage off control
+ * - workaround 2: adjust the power sequence register
+ * - workaround X...: if more
+ * - (IMPORTANT) Exit test mode and back to PMIC normal mode.
+ * During the duration of this process, all other I2C registers access
+ * are invalid hence we need to do this "atomically".
+ */
+static int bd7181x_workaround_set(struct bd7181x *bd7181x, int suspend)
+{
+	struct i2c_client *client = bd7181x->i2c_client;
+	int ret;
+	u8 reg = 0;
+
+	if (unlikely(!client))
+		return -EINVAL;
+
+	/*
+	 * lock at the adapter level explicitly. If there are any other processes
+	 * (including threaded IRQ handlers) who wish to access the i2c, it will
+	 * need to wait.
+	 * This is a poor man's way to ensure atomicity in executing a
+	 * a sequence of i2c operations back to back.
+	 */
+	i2c_lock_adapter(client->adapter);
+
+	/* Enter PMIC test mode */
+	ret = bd7181x_enter_test_mode(client);
+	if (ret)
+		goto out;
+
+	/* workaround 1. voltage off sequence toggling.
+	 * This will address the problem of VDD_ARM voltage drops to 0 too slow (~116ms)
+	 * during suspend and if a wakeup interrupt comes in within the ~116ms interval.
+	 * VDD_ARM voltage will ramp up too slow and result in a system watchdog.
+	 */
+	ret = bd7181x_read_i2c_reg(client, BD7181X_TEST_REG_VOLT_OFFSEQ_CTL, &reg);
+	if (likely(!ret)) {
+		/* Test register 0x02 description
+		 * [bit 7]:    Voltage Off sequence control
+		 *             0=Enable off sequence  (default, when resume)
+		 *               power-off-sequence get disabled sequentially hence slow
+		 *             1=Disable off sequence (before suspend)
+		 *               power-off-sequence get disabled in parallel
+		 * [bit 6:0] : Trimming bit for reference voltage
+		 */
+		reg = (suspend)? (reg | 0x80) : (reg & 0x7f);
+		ret = bd7181x_write_i2c_reg(client, BD7181X_TEST_REG_VOLT_OFFSEQ_CTL, reg);
+		/* This is NOT fatal, warm it if failed */
+		WARN_ON(ret);
+	}
+
+	/* workaround 2. Change power sequence interval time before going into suspend,
+	 * set the interval time to minimum so when resume, the VDD_ARM
+	 * will be able to power up within 4ms.
+	 * After resume, set the the interval time back to normal.
+	 */
+	if (suspend)
+		ret = bd7181x_write_i2c_reg(client, BD7181X_TEST_REG_POWER_SEQ_REG,
+					    BD7181X_TEST_REG_SEQ_INTV_TIME_MIN);
+	else
+		ret = bd7181x_write_i2c_reg(client, BD7181X_TEST_REG_POWER_SEQ_REG,
+					    BD7181X_TEST_REG_SEQ_INTV_TIME_INIT);
+
+	/* Exit PMIC test mode, back to normal */
+	if (bd7181x_write_i2c_reg(client, BD7181X_REG_TEST_MODE,
+				  BD7181X_TEST_REG_ACCESS_USER_AREA)) {
+		/* Fail to exit test mode, this should not happen.
+		 * Not much we can do, warn it and let's try again.
+		 */
+		WARN_ON(1);
+		bd7181x_write_i2c_reg(client, BD7181X_REG_TEST_MODE,
+				      BD7181X_TEST_REG_ACCESS_USER_AREA);
+	}
+
+out:
+	i2c_unlock_adapter(client->adapter);
+
+	/* everything went ok, delay a bit for test setting to take effect */
+	if (!ret)
+		udelay(2000);
+
+	return ret;
+}
+
+/**@brief Suspend the bd7181x PMIC
+ * @param dev bd7181x mfd device
  * @retval 0
  */
-static int bd7181x_i2c_suspend(struct device *dev)
+static int bd7181x_mfd_suspend_late(struct device *dev)
 {
 	struct bd7181x *bd7181x = dev_get_drvdata(dev);
+	int ret;
 
 	if (device_may_wakeup(dev)) {
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_1);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_2);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_3);
-		ext_bd7181x_reg_write8(BD7181X_TEST_REG_POWER_SEQ_REG,BD7181X_TEST_REG_SEQ_INTV_TIME_MIN);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_USER_AREA);
-		msleep(2);
+		/* decrease power sequence interval. If failed, do not suspend */
+	        ret = bd7181x_workaround_set(bd7181x, 1);
+		if (ret) {
+			dev_err(dev, "suspend failed\n");
+			return ret;
+		}
 		enable_irq_wake(bd7181x->chip_irq);
 	}
 	return 0;
 }
 
-/**@brief resume bd7181x i2c device
- * @param dev rtc device of system
+/**@brief Resume the bd7181x PMIC
+ * @param dev bd7181x mfd device
  * @retval 0
  */
-static int bd7181x_i2c_resume(struct device *dev)
+static int bd7181x_mfd_resume_early(struct device *dev)
 {
 	struct bd7181x *bd7181x = dev_get_drvdata(dev);
 
 	if (device_may_wakeup(dev)) {
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_1);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_2);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_AREA_3);
-		ext_bd7181x_reg_write8(BD7181X_TEST_REG_POWER_SEQ_REG,BD7181X_TEST_REG_SEQ_INTV_TIME_INIT);
-		ext_bd7181x_reg_write8(BD7181X_REG_TEST_MODE, BD7181X_TEST_REG_ACCESS_USER_AREA);
-		msleep(2);
+	        if (bd7181x_workaround_set(bd7181x, 0))
+			dev_err(dev, "resume failed\n");
 		disable_irq_wake(bd7181x->chip_irq);
 	}
 	return 0;
 }
 #endif
 
-static SIMPLE_DEV_PM_OPS(bd7181x_i2c_pm_ops, bd7181x_i2c_suspend, bd7181x_i2c_resume);
+static struct dev_pm_ops bd7181x_i2c_pm_ops = {
+	.suspend_late = bd7181x_mfd_suspend_late,
+	.resume_early = bd7181x_mfd_resume_early,
+};
 
 static const struct i2c_device_id bd7181x_i2c_id[] = {
 	{ "bd71815", 0 },

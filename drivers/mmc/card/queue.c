@@ -161,7 +161,13 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 {
 	unsigned max_discard;
 
+#ifdef CONFIG_LAB126
+	// Do not limit the max discard size.
+	// So the card can be erase with one shot.
+	max_discard = card->ext_csd.sectors;
+#else
 	max_discard = mmc_calc_max_discard(card);
+#endif
 	if (!max_discard)
 		return;
 

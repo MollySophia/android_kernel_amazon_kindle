@@ -65,6 +65,7 @@ file /lib/modules/libcomposite.ko /initrd/initramfs/lib/libcomposite.ko 0755 0 0
 file /lib/modules/g_mass_storage.ko /initrd/initramfs/lib/g_mass_storage.ko 0755 0 0
 
 # eink driver
+file /lib/modules/mxc_epdc_eink.ko /initrd/initramfs/lib/mxc_epdc_eink.ko 0755 0 0
 file /lib/modules/mxc_epdc_fb.ko /initrd/initramfs/lib/mxc_epdc_fb.ko 0755 0 0
 dir /lib/firmware 0755 0 0
 dir /lib/firmware/imx 0755 0 0

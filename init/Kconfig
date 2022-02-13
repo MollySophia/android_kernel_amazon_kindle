@@ -1324,11 +1324,22 @@ config PRINTK
 config LAB126_PRINTK_BUFFER
         default y
         bool "Enable support for recovered printk output" if EXPERT
+        select WARM_RESET
         help
           This option enables the printk buffer to be placed in a
           deterministic place at boot, and to save the contents of this
           location. The previous contents will be made available by
           proc entry.
+
+config WARM_RESET
+        depends on BD7181X_POWER
+        default n
+        bool "force the system get warm reset" if EXPERT
+        help
+          This option enables the the system warm reset so that
+          the crash oops files can be retrivaled when the system
+          booting back, especially for those memory vendors with
+          short power retaintion period.
 
 config BUG
 	bool "BUG() support" if EXPERT

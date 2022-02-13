@@ -22,6 +22,13 @@
 #include <linux/pmic_status.h>
 #include <linux/notifier.h>
 
+static struct atomic_notifier_head pmic_power_button_notifier_chain;
+static struct atomic_notifier_head pmic_battery_notifier_chain;
+static struct atomic_notifier_head pmic_charging_notifier_chain;
+static struct atomic_notifier_head pmic_temp_notifier_chain;
+static struct atomic_notifier_head pmic_fg_notifier_chain;
+static struct atomic_notifier_head pmic_batmon_notifier_chain;
+
 /* PMIC Power button notifier chain */
 int register_pmic_power_button_notifier (struct notifier_block *nb)
 {
@@ -118,3 +125,16 @@ int pmic_batmon_notifier_call_chain(unsigned long val, void *v)
 	return atomic_notifier_call_chain(&pmic_batmon_notifier_chain, val, v);
 }
 
+static int __init pmic_notifier_chains_init(void)
+{
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_power_button_notifier_chain);
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_battery_notifier_chain);
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_charging_notifier_chain);
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_temp_notifier_chain);
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_fg_notifier_chain);
+	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_batmon_notifier_chain);
+
+	return 0;
+}
+
+subsys_initcall(pmic_notifier_chains_init);

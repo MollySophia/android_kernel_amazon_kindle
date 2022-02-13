@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh_linux.c 461443 2014-03-12 02:40:59Z $
+ * $Id: bcmsdh_linux.c 461444 2014-03-12 02:55:28Z $
  */
 
 /**
@@ -47,7 +47,6 @@ extern void dhdsdio_isr(void * args);
 #if defined(CONFIG_ARCH_ODIN)
 #include <linux/platform_data/gpio-odin.h>
 #endif /* defined(CONFIG_ARCH_ODIN) */
-
 #include <dhd_linux.h>
 
 /* driver info, initialized when bcmsdh_register is called */
@@ -159,8 +158,7 @@ void* bcmsdh_probe(osl_t *osh, void *dev, void *sdioh, void *adapter_info, uint 
 	osl_set_bus_handle(osh, bcmsdh);
 
 #if !defined(CONFIG_HAS_WAKELOCK) && (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36))
-	if (dev && device_init_wakeup(dev, true) == 0)
-		bcmsdh_osinfo->dev_wake_enabled = TRUE;
+	bcmsdh_osinfo->dev_wake_enabled = TRUE;
 #endif /* !defined(CONFIG_HAS_WAKELOCK) && (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36)) */
 
 #if defined(OOB_INTR_ONLY)
@@ -197,11 +195,26 @@ err:
 
 int bcmsdh_remove(bcmsdh_info_t *bcmsdh)
 {
+#ifdef CONFIG_LAB126
+	bcmsdh_os_info_t *bcmsdh_osinfo;
+
+	if (!bcmsdh || !l_bcmsdh || (l_bcmsdh != bcmsdh)) {
+		pr_err("%s: l_bcmsdh=%p bcmsdh=%p, possible MMC error!\n",
+		       __func__, l_bcmsdh, bcmsdh);
+		return -EFAULT;
+	}
+
+	bcmsdh_osinfo = bcmsdh->os_cxt;
+	if (!bcmsdh_osinfo || !bcmsdh_osinfo->context) {
+		pr_err("%s: bcmsdh_osinfo=%p, possible MMC error!\n",
+		       __func__, bcmsdh_osinfo);
+		return -EFAULT;
+	}
+#else /* !CONFIG_LAB126 */
 	bcmsdh_os_info_t *bcmsdh_osinfo = bcmsdh->os_cxt;
+#endif /* CONFIG_LAB126 */
 
 #if !defined(CONFIG_HAS_WAKELOCK) && (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36))
-	if (bcmsdh_osinfo->dev)
-		device_init_wakeup(bcmsdh_osinfo->dev, false);
 	bcmsdh_osinfo->dev_wake_enabled = FALSE;
 #endif /* !defined(CONFIG_HAS_WAKELOCK) && (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36)) */
 
@@ -214,11 +227,33 @@ int bcmsdh_remove(bcmsdh_info_t *bcmsdh)
 
 int bcmsdh_suspend(bcmsdh_info_t *bcmsdh)
 {
+#ifdef CONFIG_LAB126
+	bcmsdh_os_info_t *bcmsdh_osinfo;
+
+	if (!bcmsdh || !l_bcmsdh || (l_bcmsdh != bcmsdh)) {
+		pr_err("%s: l_bcmsdh=%p bcmsdh=%p, possible MMC error!\n",
+		       __func__, l_bcmsdh, bcmsdh);
+		return 0;
+	}
+
+	bcmsdh_osinfo = bcmsdh->os_cxt;
+	if (bcmsdh_osinfo && bcmsdh_osinfo->context) {
+		drvinfo.remove(bcmsdh_osinfo->context);
+		MFREE(bcmsdh->osh, bcmsdh->os_cxt, sizeof(bcmsdh_os_info_t));
+		bcmsdh->os_cxt = NULL;
+	} else {
+		pr_err("%s: bcmsdh_osinfo=%p, possible MMC error!\n",
+		       __func__, bcmsdh_osinfo);
+	}
+
+	return bcmsdh_detach(bcmsdh->osh, bcmsdh);
+#else /* !CONFIG_LAB126 */
 	bcmsdh_os_info_t *bcmsdh_osinfo = bcmsdh->os_cxt;
 
 	if (drvinfo.suspend && drvinfo.suspend(bcmsdh_osinfo->context))
 		return -EBUSY;
 	return 0;
+#endif /* CONFIG_LAB126 */
 }
 
 int bcmsdh_resume(bcmsdh_info_t *bcmsdh)
@@ -238,7 +273,6 @@ extern void sdio_func_unreg_notify(void);
 #if defined(BCMLXSDMMC)
 int bcmsdh_reg_sdio_notify(void* semaphore)
 {
-	printk(KERN_ERR "bcmsdh_reg_sdio_notify enter 3\n");
 	return sdio_func_reg_notify(semaphore);
 }
 

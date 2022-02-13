@@ -423,6 +423,13 @@ static int sb_finish_set_opts(struct super_block *sb)
 	if (strncmp(sb->s_type->name, "sysfs", sizeof("sysfs")) == 0)
 		sbsec->flags |= SE_SBLABELSUPP;
 
+	/*
+	 * Special handling for rootfs. Is genfs but supports
+	 * setting SELinux context on in-core inodes.
+	 */
+	if (strncmp(sb->s_type->name, "rootfs", sizeof("rootfs")) == 0)
+		sbsec->flags |= SE_SBLABELSUPP;
+	
 	/* Initialize the root inode. */
 	rc = inode_doinit_with_dentry(root_inode, root);
 
@@ -2672,6 +2679,7 @@ static int selinux_inode_follow_link(struct dentry *dentry, struct nameidata *na
 
 static noinline int audit_inode_permission(struct inode *inode,
 					   u32 perms, u32 audited, u32 denied,
+					   int result,
 					   unsigned flags)
 {
 	struct common_audit_data ad;
@@ -2682,7 +2690,7 @@ static noinline int audit_inode_permission(struct inode *inode,
 	ad.u.inode = inode;
 
 	rc = slow_avc_audit(current_sid(), isec->sid, isec->sclass, perms,
-			    audited, denied, &ad, flags);
+			    audited, denied, result, &ad, flags);
 	if (rc)
 		return rc;
 	return 0;
@@ -2724,7 +2732,7 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 	if (likely(!audited))
 		return rc;
 
-	rc2 = audit_inode_permission(inode, perms, audited, denied, flags);
+	rc2 = audit_inode_permission(inode, perms, audited, denied, rc, flags);
 	if (rc2)
 		return rc2;
 	return rc;
@@ -3035,6 +3043,46 @@ static void selinux_file_free_security(struct file *file)
 	file_free_security(file);
 }
 
+/*
+ * Check whether a task has the ioctl permission and cmd
+ * operation to an inode.
+ */
+int ioctl_has_perm(const struct cred *cred, struct file *file,
+		u32 requested, u16 cmd)
+{
+	struct common_audit_data ad;
+	struct file_security_struct *fsec = file->f_security;
+	struct inode *inode = file_inode(file);
+	struct inode_security_struct *isec = inode->i_security;
+	struct lsm_ioctlop_audit ioctl;
+	u32 ssid = cred_sid(cred);
+	int rc;
+	u8 driver = cmd >> 8;
+	u8 xperm = cmd & 0xff;
+
+	ad.type = LSM_AUDIT_DATA_IOCTL_OP;
+	ad.u.op = &ioctl;
+	ad.u.op->cmd = cmd;
+	ad.u.op->path = file->f_path;
+
+	if (ssid != fsec->sid) {
+		rc = avc_has_perm(ssid, fsec->sid,
+				SECCLASS_FD,
+				FD__USE,
+				&ad);
+		if (rc)
+			goto out;
+	}
+
+	if (unlikely(IS_PRIVATE(inode)))
+		return 0;
+
+	rc = avc_has_extended_perms(ssid, isec->sid, isec->sclass,
+			requested, driver, xperm, &ad);
+out:
+	return rc;
+}
+
 static int selinux_file_ioctl(struct file *file, unsigned int cmd,
 			      unsigned long arg)
 {
@@ -3077,7 +3125,7 @@ static int selinux_file_ioctl(struct file *file, unsigned int cmd,
 	 * to the file's ioctl() function.
 	 */
 	default:
-		error = file_has_perm(cred, file, FILE__IOCTL);
+		error = ioctl_has_perm(cred, file, FILE__IOCTL, (u16) cmd);
 	}
 	return error;
 }

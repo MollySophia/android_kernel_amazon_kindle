@@ -454,6 +454,15 @@ static int call_crda(const char *alpha2)
 	/* query internal regulatory database (if it exists) */
 	reg_regdb_query(alpha2);
 
+#ifdef CONFIG_LAB126
+	/* Workaround for NETLINK active wakeup source issue in suspend path:
+	 * Do not send uevent on regulatory domain change.
+	 * Ideally we should set this flag only for suspend case, but it seems
+	 * that no existing flag is available.
+	 */
+	dev_set_uevent_suppress(&reg_pdev->dev, true);
+#endif /* CONFIG_LAB126 */
+
 	return kobject_uevent(&reg_pdev->dev.kobj, KOBJ_CHANGE);
 }
 

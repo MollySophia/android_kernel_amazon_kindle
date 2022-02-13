@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Freescale Semiconductor, Inc. All Rights Reserved
+ * Copyright (C) 2013-2015 Freescale Semiconductor, Inc. All Rights Reserved
  */
 
 /*
@@ -67,6 +67,11 @@ struct mxcfb_gamma {
 	int slopek[16];
 };
 
+struct mxcfb_gpu_split_fmt {
+	struct fb_var_screeninfo var;
+	unsigned long offset;
+};
+
 struct mxcfb_rect {
 	__u32 top;
 	__u32 left;
@@ -104,6 +109,9 @@ struct mxcfb_rect {
 #define WAVEFORM_MODE_GL4        0xA  /* 2-bit from white transition */
 #define WAVEFORM_MODE_GL16_INV   0xB  /* High fidelity for black transition */
 
+
+#define WAVEFORM_MODE_GLR16			4
+#define WAVEFORM_MODE_GLD16			5
 #define WAVEFORM_MODE_AUTO			257
 
 #define TEMP_USE_AMBIENT			0x1000
@@ -115,9 +123,26 @@ struct mxcfb_rect {
 #define EPDC_FLAG_USE_ALT_BUFFER		0x100
 #define EPDC_FLAG_TEST_COLLISION		0x200
 #define EPDC_FLAG_GROUP_UPDATE			0x400
-#define EPDC_FLAG_USE_REAGLD			0x1000
+#define EPDC_FLAG_FORCE_Y2            		0x800
+#define EPDC_FLAG_USE_REAGLD         		0x1000
 #define EPDC_FLAG_USE_DITHERING_Y1		0x2000
+
+#if defined(CONFIG_LAB126)
+#define EPDC_FLAG_USE_DITHERING_Y2    0x4000
+#define EPDC_FLAG_USE_DITHERING_Y4    0x8000
+#else
 #define EPDC_FLAG_USE_DITHERING_Y4		0x4000
+#define EPDC_FLAG_USE_REGAL				0x8000
+#endif
+
+enum mxcfb_dithering_mode {
+	EPDC_FLAG_USE_DITHERING_PASSTHROUGH = 0x0,
+	EPDC_FLAG_USE_DITHERING_FLOYD_STEINBERG,
+	EPDC_FLAG_USE_DITHERING_ATKINSON,
+	EPDC_FLAG_USE_DITHERING_ORDERED,
+	EPDC_FLAG_USE_DITHERING_QUANT_ONLY,
+	EPDC_FLAG_USE_DITHERING_MAX,
+};
 
 /* Waveform type as return by MXCFB_GET_WAVEFORM_TYPE ioctl */
 /* This indicates to user-space what is supported by the waveform */
@@ -145,8 +170,11 @@ struct mxcfb_update_data {
 	__u32 update_marker;
         __u32 hist_bw_waveform_mode;    /*Lab126: Def bw waveform for hist analysis*/
         __u32 hist_gray_waveform_mode;  /*Lab126: Def gray waveform for hist analysis*/
+
 	int temp;
 	unsigned int flags;
+	int dither_mode;
+	int quant_bit;
 	struct mxcfb_alt_buffer_data alt_buffer_data;
 };
 
@@ -160,7 +188,6 @@ struct mxcfb_update_marker_data {
  * Needed for driver to perform auto-waveform selection
  */
 struct mxcfb_waveform_modes {
-#if defined (CONFIG_LAB126)
         int mode_init;
         int mode_du;
         int mode_gc4;
@@ -176,15 +203,6 @@ struct mxcfb_waveform_modes {
         int mode_reagld;
         int mode_gl16_inv;
         int mode_gl4;
-
-#else
-	int mode_init;
-	int mode_du;
-	int mode_gc4;
-	int mode_gc8;
-	int mode_gc16;
-	int mode_gc32;
-#endif
 };
 
 /*
@@ -208,32 +226,36 @@ struct mxcfb_csc_matrix {
 #define MXCFB_GET_FB_BLANK     _IOR('F', 0x2B, u_int32_t)
 #define MXCFB_SET_DIFMT		_IOW('F', 0x2C, u_int32_t)
 #define MXCFB_CSC_UPDATE	_IOW('F', 0x2D, struct mxcfb_csc_matrix)
+#define MXCFB_SET_GPU_SPLIT_FMT	_IOW('F', 0x2F, struct mxcfb_gpu_split_fmt)
+#define MXCFB_SET_PREFETCH	_IOW('F', 0x30, int)
+#define MXCFB_GET_PREFETCH	_IOR('F', 0x31, int)
 
 /* IOCTLs for E-ink panel updates */
-#define MXCFB_SET_WAVEFORM_MODES	_IOW('F', 0x2B, struct mxcfb_waveform_modes)
-#define MXCFB_SET_TEMPERATURE		_IOW('F', 0x2C, int32_t)
-#define MXCFB_SET_AUTO_UPDATE_MODE	_IOW('F', 0x2D, __u32)
-#define MXCFB_SEND_UPDATE		_IOW('F', 0x2E, struct mxcfb_update_data)
-#define MXCFB_WAIT_FOR_UPDATE_COMPLETE	_IOWR('F', 0x2F, struct mxcfb_update_marker_data)
-#define MXCFB_SET_PWRDOWN_DELAY		_IOW('F', 0x30, int32_t)
-#define MXCFB_GET_PWRDOWN_DELAY		_IOR('F', 0x31, int32_t)
-#define MXCFB_SET_UPDATE_SCHEME		_IOW('F', 0x32, __u32)
-#define MXCFB_SET_PAUSE			_IOW('F', 0x33, __u32)
-#define MXCFB_GET_PAUSE			_IOW('F', 0x34, __u32)
-#define MXCFB_SET_RESUME		_IOW('F', 0x35, __u32)
+#define MXCFB_SET_PWRDOWN_DELAY		_IOW('F', 0x40, int32_t)
+#define MXCFB_GET_PWRDOWN_DELAY		_IOR('F', 0x41, int32_t)
+#define MXCFB_SET_UPDATE_SCHEME		_IOW('F', 0x42, __u32)
+#define MXCFB_GET_WORK_BUFFER		_IOWR('F', 0x44, unsigned long)
+#define MXCFB_DISABLE_EPDC_ACCESS	_IO('F', 0x45)
+#define MXCFB_ENABLE_EPDC_ACCESS	_IO('F', 0x46)
+#define MXCFB_GET_REFRESH_RATE		_IOWR('F', 0x47, int32_t)
+#define MXCFB_SET_WAVEFORM_MODES	_IOW('F', 0x4B, struct mxcfb_waveform_modes)
+#define MXCFB_SET_TEMPERATURE		_IOW('F', 0x4C, int32_t)
+#define MXCFB_SET_AUTO_UPDATE_MODE	_IOW('F', 0x4D, __u32)
+#define MXCFB_SEND_UPDATE		_IOW('F', 0x4E, struct mxcfb_update_data)
+#define MXCFB_WAIT_FOR_UPDATE_COMPLETE	_IOWR('F', 0x4F, struct mxcfb_update_marker_data)
 
-#if 0
-#define MXCFB_GET_WORK_BUFFER		_IOWR('F', 0x34, unsigned long)
-#define MXCFB_DISABLE_EPDC_ACCESS	_IO('F', 0x35)
-#define MXCFB_ENABLE_EPDC_ACCESS	_IO('F', 0x36)
-#endif
-#define MXCFB_GET_WORK_BUFFER		_IOWR('F', 0x36, unsigned long)
-#define MXCFB_WAIT_FOR_UPDATE_SUBMISSION	_IOW('F', 0x37, __u32)
-#define MXCFB_GET_TEMPERATURE			_IOR('F', 0x38, int32_t)
-#define MXCFB_GET_WAVEFORM_TYPE		_IOR('F', 0x39, __u32)
-#define MXCFB_GET_MATERIAL_TYPE   _IOR('F', 0x3A, __u32)
+/* by LAB126 */
+#define MXCFB_SET_PAUSE                 _IOW('F', 0x63, __u32)
+#define MXCFB_GET_PAUSE                 _IOW('F', 0x64, __u32)
+#define MXCFB_SET_RESUME                _IOW('F', 0x65, __u32)
+#define MXCFB_GET_TEMPERATURE		_IOR('F', 0x68, int32_t)
+#define MXCFB_GET_WAVEFORM_TYPE		_IOR('F', 0x69, __u32)
+#define MXCFB_GET_MATERIAL_TYPE		_IOR('F', 0x6A, __u32)
+#define MXCFB_WAIT_FOR_UPDATE_SUBMISSION	_IOW('F', 0x6B, __u32)
 
-#define MXCFB_DISABLE_EPDC_ACCESS	_IO('F', 0x3B)
-#define MXCFB_ENABLE_EPDC_ACCESS	_IO('F', 0x3C)
+
+
+
+#define EHWFAULT   901
 
 #endif

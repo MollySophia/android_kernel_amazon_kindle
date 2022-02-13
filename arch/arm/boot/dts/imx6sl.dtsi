@@ -447,7 +447,6 @@
 					regulator-name = "cpu";
 					regulator-min-microvolt = <725000>;
 					regulator-max-microvolt = <1450000>;
-					regulator-always-on;
 					anatop-reg-offset = <0x140>;
 					anatop-vol-bit-shift = <0>;
 					anatop-vol-bit-width = <5>;
@@ -480,7 +479,6 @@
 					regulator-name = "vddsoc";
 					regulator-min-microvolt = <725000>;
 					regulator-max-microvolt = <1450000>;
-					regulator-always-on;
 					anatop-reg-offset = <0x140>;
 					anatop-vol-bit-shift = <18>;
 					anatop-vol-bit-width = <5>;
@@ -812,6 +810,14 @@
 				status = "disabled";
 			};
 
+		};
+		ramoops_device {
+			compatible = "fsl,mxc_ramoops";
+			record_size = <524288>; /*512K*/
+			console_size= <262144>; /*256K*/
+			ftrace_size= <262144>;  /*256K*/
+			dump_oops = <1>;
+			status = "okay";
 		};
 	};
 };

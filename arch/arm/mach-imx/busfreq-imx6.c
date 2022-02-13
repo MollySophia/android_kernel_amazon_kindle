@@ -117,7 +117,7 @@ static struct clk *pll3_pfd1_540m;
 static struct clk *m4_clk;
 
 static u32 pll2_org_rate;
-#ifdef CONFIG_LAB126
+#ifndef CONFIG_LAB126
 #define DEFER_LOW_BUS_FREQ
 #endif 
 #ifdef DEFER_LOW_BUS_FREQ
@@ -1041,7 +1041,23 @@ static int busfreq_probe(struct platform_device *pdev)
 	audio_bus_freq_mode = 0;
 	ultra_low_bus_freq_mode = 0;
 
+#ifdef CONFIG_LAB126
+	/*
+	 * Do not start with bus frequency scaling enabled. Doing so would screw
+	 * up the calculation of loops_per_jiffy forever as PXP driver would
+	 * call release_bus_freq during its probe and this driver will lower the
+	 * ARM clock frequency before the CPUFreq driver reads this and sets its
+	 * l_p_j_ref_freq from the ARM clock.
+	 * The bus frequency scaling should be enabled from the userspace after the
+	 * userspace is ready.
+	 * This may not be necessary with DEFER_LOW_BUS_FREQ enabled as the reduction
+	 * in ARM clock will be delayed till after CPUFreq comes up and initializes its
+	 * l_p_j_ref_freq.
+	 */
+	bus_freq_scaling_is_active = 0;
+#else
 	bus_freq_scaling_is_active = 1;
+#endif
 	bus_freq_scaling_initialized = 1;
 
 	ddr_low_rate = LPAPM_CLK;

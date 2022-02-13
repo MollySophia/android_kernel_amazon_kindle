@@ -158,12 +158,19 @@ char * wfm_name_for_mode(struct mxc_epdc_fb_data *fb_data, int mode);
 char proc_msg_buf[512];
 
 static ssize_t proc_wfm_data_read(struct file *file, char __user *buf,size_t count, loff_t *off);
-static ssize_t proc_wfm_version_read(struct file *file, char __user *buf,size_t count, loff_t *off);
+static int proc_wfm_version_open(struct inode *inode, struct file *file);
+static ssize_t proc_wfm_version_show(struct seq_file *m, void *v);
 //static ssize_t proc_wfm_human_version_read(struct file *file, char __user *buf,size_t count, loff_t *off);
-static ssize_t proc_wfm_embedded_checksum_read(struct file *file, char __user *buf,size_t count, loff_t *off);
-static ssize_t proc_wfm_computed_checksum_read(struct file *file, char __user *buf,size_t count, loff_t *off);
-static ssize_t proc_wfm_info_read(struct file *file, char __user *buf,size_t count, loff_t *off);
-static ssize_t proc_wfm_source_read(struct file *file, char __user *buf,size_t count, loff_t *off);
+static int proc_wfm_embedded_checksum_open(struct inode *inode,
+					   struct file *file);
+static ssize_t proc_wfm_embedded_checksum_show(struct seq_file *m, void *v);
+static int proc_wfm_computed_checksum_open(struct inode *inode,
+					   struct file *file);
+static ssize_t proc_wfm_computed_checksum_show(struct seq_file *m, void *v);
+static int proc_wfm_info_open(struct inode *inode, struct file *file);
+static ssize_t proc_wfm_info_show(struct seq_file *m, void *v);
+static int proc_wfm_source_open(struct inode *inode, struct file *file);
+static ssize_t proc_wfm_source_show(struct seq_file *m, void *v);
 char *eink_get_wfm_human_version(struct waveform_data_header *wv_header, u8 *wf_buffer, size_t wf_buffer_len, char *str, size_t str_len);
 
 
@@ -780,35 +787,44 @@ static const struct file_operations proc_wfm_data_fops = {
  .write = NULL,
 };
 
-
 static const struct file_operations proc_wfm_version_fops = {
- .owner = THIS_MODULE,
- .read  = proc_wfm_version_read,
- .write = NULL,
+	.owner = THIS_MODULE,
+	.open  = proc_wfm_version_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 static const struct file_operations proc_wfm_embedded_checksum_fops = {
- .owner = THIS_MODULE,
- .read  = proc_wfm_embedded_checksum_read,
- .write = NULL,
+	.owner = THIS_MODULE,
+	.open  = proc_wfm_embedded_checksum_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 static const struct file_operations proc_wfm_computed_checksum_fops = {
- .owner = THIS_MODULE,
- .read  = proc_wfm_computed_checksum_read,
- .write = NULL,
+	.owner = THIS_MODULE,
+	.open  = proc_wfm_computed_checksum_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 static const struct file_operations proc_wfm_info_fops = {
- .owner = THIS_MODULE,
- .read  = proc_wfm_info_read,
- .write = NULL,
+	.owner = THIS_MODULE,
+	.open  = proc_wfm_info_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 static const struct file_operations proc_wfm_source_fops = {
- .owner = THIS_MODULE,
- .read  = proc_wfm_source_read,
- .write = NULL,
+	.owner = THIS_MODULE,
+	.open = proc_wfm_source_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
 };
 
 
@@ -889,23 +905,22 @@ static ssize_t proc_wfm_data_read(struct file *file, char __user *buf,size_t cou
 	return length;
 }
 
-static ssize_t proc_wfm_version_read(struct file *file, char __user *buf,size_t count, loff_t *off)
-//static int proc_wfm_version_read(char *page, char **start, off_t off, int count, int *eof, void *data)
-{
-	int result = 0;
 
-	// We're done after one shot.
-	if (0 == *off) {
-		char version_str[WAVEFORM_VERSION_STRING_MAX] = "";
-		result = snprintf(proc_msg_buf, count, "%s\n",
-			eink_get_wfm_version((u8 *)g_fb_data->wv_header,
-				version_str, WAVEFORM_VERSION_STRING_MAX));
-		result=copy_to_user(buf,proc_msg_buf,count)?-EFAULT:count;
-	}
-	*off=0;
-	return result;
+static int proc_wfm_version_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, proc_wfm_version_show, NULL);
 }
 
+static ssize_t proc_wfm_version_show(struct seq_file *m, void *v)
+{
+	char version_str[WAVEFORM_VERSION_STRING_MAX] = "";
+
+	seq_printf(m, "%s\n",
+		   eink_get_wfm_version((u8 *)g_fb_data->wv_header,
+					version_str,
+					WAVEFORM_VERSION_STRING_MAX));
+	return 0;
+}
 
 static int proc_wfm_human_version_read(struct seq_file *file, void *data)
 {
@@ -942,110 +957,89 @@ static struct wf_proc_dir_entry wfm_proc_entries[] = {
 	{ "source", S_IRUGO, &proc_wfm_source_fops,  NULL },
 };
 
-static ssize_t proc_wfm_embedded_checksum_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+static int proc_wfm_embedded_checksum_open(struct inode *inode,
+					   struct file *file)
 {
-	int result = 0;
-
-	// We're done after one shot.
-	if (0 == *off) {
-//		char checksum_str[CHECKSUM_STRING_MAX] = "";
-//		result = snprintf(proc_msg_buf, count, "%s\n",
-//		                  wfm_get_embedded_checksum((u8 *)g_fb_data->wv_header,
-//		                             checksum_str, CHECKSUM_STRING_MAX));
-//		result=copy_to_user(buf,proc_msg_buf,count)?-EFAULT:count;
-	}
-	*off=0;
-
-	return result;
+	return single_open(file, proc_wfm_embedded_checksum_show, NULL);
 }
 
-static ssize_t proc_wfm_computed_checksum_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+static ssize_t proc_wfm_embedded_checksum_show(struct seq_file *m, void *v)
 {
-	int result = 0;
-
-	// TODO ALEX
-//	printk(KERN_ALERT "Note: The computed checksum is not accurate (Todo for Alex)\n");
-
-	// We're done after one shot.
-	//
-	if (0 == *off) {
-//		char checksum_str[CHECKSUM_STRING_MAX] = "";
-//		result = snprintf(proc_msg_buf, count, "%s\n",
-//		                  wfm_get_computed_checksum((u8 *)g_fb_data->waveform_buffer_virt,
-//		                  checksum_str, CHECKSUM_STRING_MAX));
-//		result=copy_to_user(buf,proc_msg_buf,count)?-EFAULT:count;
-	}
-	*off=0;
-
-	return result;
+	/* TODO */
+	return 0;
 }
 
-static ssize_t proc_wfm_info_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+static int proc_wfm_computed_checksum_open(struct inode *inode,
+					   struct file *file)
 {
-	int result = 0;
+	return single_open(file, proc_wfm_computed_checksum_show, NULL);
+}
+
+static ssize_t proc_wfm_computed_checksum_show(struct seq_file *m, void *v)
+{
+	/* TODO ALEX, Note: The computed checksum is not accurate */
+	return 0;
+}
+
+static int proc_wfm_info_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, proc_wfm_info_show, NULL);
+}
+
+static ssize_t proc_wfm_info_show(struct seq_file *m, void *v)
+{
 	struct eink_waveform_info_t info;
+
 	eink_get_waveform_info((u8 *)g_fb_data->wv_header, &info);
-
-	if (0 == *off) {
-		result = sprintf(proc_msg_buf,
-		                 " Waveform version:  0x%02X\n"
-		                 "       subversion:  0x%02X\n"
-		                 "             type:  0x%02X (v%02d)\n"
-		                 "         run type:  0x%02X\n"
-		                 "     mode version:  0x%02X\n"
-		                 "      tuning bias:  0x%02X\n"
-		                 "       frame rate:  0x%02X\n"
-		                 "       vcom shift:  0x%02X\n"
-		                 "        bit depth:  0x%02X\n"
-		                 "\n"
-		                 "     FPL platform:  0x%02X\n"
-		                 "              lot:  0x%04X\n"
-		                 "             size:  0x%02X\n"
-		                 " adhesive run no.:  0x%02X\n"
-		                 "\n"
-		                 "        File size:  0x%08lX\n"
-		                 "         Mfg code:  0x%02X\n"
-		                 "       Serial no.:  0x%08lX\n"
-		                 "         Checksum:  0x%08lX\n",
-
-		                 info.waveform.version,
-		                 info.waveform.subversion,
-		                 info.waveform.type,
-		                 info.waveform.revision,
-		                 info.waveform.run_type,
-		                 info.waveform.mode_version,
-		                 info.waveform.tuning_bias,
-		                 info.waveform.fpl_rate,
-		                 info.waveform.vcom_shift,
-		                 info.waveform.bit_depth,
-
-		                 info.fpl.platform,
-		                 info.fpl.lot,
-		                 info.fpl.size,
-		                 info.fpl.adhesive_run_number,
-
-		                 info.filesize,
-		                 info.waveform.mfg_code,
-		                 info.waveform.serial_number,
-		                 info.checksum);
-		result=copy_to_user(buf,proc_msg_buf,count)?-EFAULT:count;
-	}	
-	*off=0;
-
-	return result;
+	seq_printf(m, " Waveform version:  0x%02X\n"
+		   "       subversion:  0x%02X\n"
+		   "             type:  0x%02X (v%02d)\n"
+		   "         run type:  0x%02X\n"
+		   "     mode version:  0x%02X\n"
+		   "      tuning bias:  0x%02X\n"
+		   "       frame rate:  0x%02X\n"
+		   "       vcom shift:  0x%02X\n"
+		   "        bit depth:  0x%02X\n"
+		   "\n"
+		   "     FPL platform:  0x%02X\n"
+		   "              lot:  0x%04X\n"
+		   "             size:  0x%02X\n"
+		   " adhesive run no.:  0x%02X\n"
+		   "\n"
+		   "        File size:  0x%08lX\n"
+		   "         Mfg code:  0x%02X\n"
+		   "       Serial no.:  0x%08lX\n"
+		   "         Checksum:  0x%08lX\n",
+		   info.waveform.version,
+		   info.waveform.subversion,
+		   info.waveform.type,
+		   info.waveform.revision,
+		   info.waveform.run_type,
+		   info.waveform.mode_version,
+		   info.waveform.tuning_bias,
+		   info.waveform.fpl_rate,
+		   info.waveform.vcom_shift,
+		   info.waveform.bit_depth,
+		   info.fpl.platform,
+		   info.fpl.lot,
+		   info.fpl.size,
+		   info.fpl.adhesive_run_number,
+		   info.filesize,
+		   info.waveform.mfg_code,
+		   info.waveform.serial_number,
+		   info.checksum);
+	return 0;
 }
 
-static ssize_t proc_wfm_source_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+static int proc_wfm_source_show(struct seq_file *m, void *v)
 {
-	int result = 0;
+	seq_printf(m, "%s\n", (wfm_using_builtin ? "built-in" : "stored"));
+	return 0;
+}
 
-	if (*off == 0) {
-		result = sprintf(proc_msg_buf, "%s\n", (wfm_using_builtin ? "built-in" : "stored"));
-		result=copy_to_user(buf,proc_msg_buf,count)?-EFAULT:count;
-	}
-	*off=0;
-
-	return result;
+static int proc_wfm_source_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, proc_wfm_source_show, NULL);
 }
 
 /*

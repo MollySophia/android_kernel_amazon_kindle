@@ -380,6 +380,7 @@ struct usb_composite_dev {
 	struct list_head		gstrings;
 	struct usb_composite_driver	*driver;
 	u8				next_string_id;
+	u8				next_reuse_string_id;
 	char				*def_manufacturer;
 
 	/* the gadget driver won't enable the data pullup
@@ -403,6 +404,8 @@ extern struct usb_string *usb_gstrings_attach(struct usb_composite_dev *cdev,
 		struct usb_gadget_strings **sp, unsigned n_strings);
 
 extern int usb_string_ids_n(struct usb_composite_dev *c, unsigned n);
+extern int usb_reusable_string_ids_n(struct usb_composite_dev *c, unsigned n);
+extern int usb_cleanup_reusable_string_ids(struct usb_composite_dev *c);
 
 extern void composite_disconnect(struct usb_gadget *gadget);
 extern int composite_setup(struct usb_gadget *gadget,

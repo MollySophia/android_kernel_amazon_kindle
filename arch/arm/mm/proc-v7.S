@@ -141,6 +141,55 @@ ENTRY(cpu_v7_do_resume)
 ENDPROC(cpu_v7_do_resume)
 #endif
 
+/*
+ * Cortex-A8/A12/A17 that require a BTB invalidation on switch_mm
+ */
+	globl_equ	cpu_v7_btbinv_proc_init,	cpu_v7_proc_init
+	globl_equ	cpu_v7_btbinv_proc_fin,		cpu_v7_proc_fin
+	globl_equ	cpu_v7_btbinv_reset,		cpu_v7_reset
+	globl_equ	cpu_v7_btbinv_do_idle,		cpu_v7_do_idle
+	globl_equ	cpu_v7_btbinv_dcache_clean_area, cpu_v7_dcache_clean_area
+	globl_equ	cpu_v7_btbinv_set_pte_ext,	cpu_v7_set_pte_ext
+	globl_equ	cpu_v7_btbinv_suspend_size,	cpu_v7_suspend_size
+#ifdef CONFIG_ARM_CPU_SUSPEND
+	globl_equ	cpu_v7_btbinv_do_suspend,	cpu_v7_do_suspend
+	globl_equ	cpu_v7_btbinv_do_resume,	cpu_v7_do_resume
+#endif
+
+/*
+ * Cortex-A9 processor functions
+ */
+	globl_equ	cpu_ca9mp_proc_init,	cpu_v7_proc_init
+	globl_equ	cpu_ca9mp_proc_fin,	cpu_v7_proc_fin
+	globl_equ	cpu_ca9mp_reset,	cpu_v7_reset
+	globl_equ	cpu_ca9mp_do_idle,	cpu_v7_do_idle
+	globl_equ	cpu_ca9mp_dcache_clean_area, cpu_v7_dcache_clean_area
+	globl_equ	cpu_ca9mp_switch_mm,	cpu_v7_btbinv_switch_mm
+	globl_equ	cpu_ca9mp_set_pte_ext,	cpu_v7_set_pte_ext
+.globl	cpu_ca9mp_suspend_size
+.equ	cpu_ca9mp_suspend_size, cpu_v7_suspend_size + 4 * 2
+#ifdef CONFIG_ARM_CPU_SUSPEND
+ENTRY(cpu_ca9mp_do_suspend)
+	stmfd	sp!, {r4 - r5}
+	mrc	p15, 0, r4, c15, c0, 1		@ Diagnostic register
+	mrc	p15, 0, r5, c15, c0, 0		@ Power register
+	stmia	r0!, {r4 - r5}
+	ldmfd	sp!, {r4 - r5}
+	b	cpu_v7_do_suspend
+ENDPROC(cpu_ca9mp_do_suspend)
+
+ENTRY(cpu_ca9mp_do_resume)
+	ldmia	r0!, {r4 - r5}
+	mrc	p15, 0, r10, c15, c0, 1		@ Read Diagnostic register
+	teq	r4, r10				@ Already restored?
+	mcrne	p15, 0, r4, c15, c0, 1		@ No, so restore it
+	mrc	p15, 0, r10, c15, c0, 0		@ Read Power register
+	teq	r5, r10				@ Already restored?
+	mcrne	p15, 0, r5, c15, c0, 0		@ No, so restore it
+	b	cpu_v7_do_resume
+ENDPROC(cpu_ca9mp_do_resume)
+#endif
+
 #ifdef CONFIG_CPU_PJ4B
 	globl_equ	cpu_pj4b_switch_mm,     cpu_v7_switch_mm
 	globl_equ	cpu_pj4b_set_pte_ext,	cpu_v7_set_pte_ext
@@ -385,6 +434,10 @@ __v7_setup_stack:
 
 	@ define struct processor (see <asm/proc-fns.h> and proc-macros.S)
 	define_processor_functions v7, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
+	define_processor_functions v7_btbinv, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
+#ifndef CONFIG_ARM_LPAE
+	define_processor_functions ca9mp, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
+#endif
 #ifdef CONFIG_CPU_PJ4B
 	define_processor_functions pj4b, dabort=v7_early_abort, pabort=v7_pabort, suspend=1
 #endif
@@ -439,6 +492,16 @@ __v7_ca9mp_proc_info:
 	.long	0xff0ffff0
 	__v7_proc __v7_ca9mp_setup
 	.size	__v7_ca9mp_proc_info, . - __v7_ca9mp_proc_info
+
+	/*
+	 * ARM Ltd. Cortex A8 processor.
+	 */
+	.type	__v7_ca8_proc_info, #object
+__v7_ca8_proc_info:
+	.long	0x410fc080
+	.long	0xff0ffff0
+	__v7_proc  __v7_setup, proc_fns = v7_btbinv_processor_functions
+	.size	__v7_ca8_proc_info, . - __v7_ca8_proc_info
 
 #endif	/* CONFIG_ARM_LPAE */
 

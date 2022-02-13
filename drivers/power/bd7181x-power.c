@@ -25,10 +25,18 @@
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <asm/uaccess.h>
-#include <llog.h>
- 
-#define JITTER_DEFAULT		3000		/* hope 3s is enough */
-#define JITTER_REPORT_CAP	10000		/* 10 seconds */
+#include <linux/input.h>
+#if defined(CONFIG_AMAZON_METRICS_LOG)
+#define BD7181x_METRIC_BUFFER_SIZE  128
+#include <linux/metricslog.h>
+char bd7181x_metric_buf[BD7181x_METRIC_BUFFER_SIZE];
+#endif
+#ifdef CONFIG_PM_AUTOSLEEP
+static char* BD7181x_VBUS_WAKE_LOCK_NAME = "bd7181x_vbus";
+#endif
+
+#define JITTER_DEFAULT		30000		/* 30 seconds */
+#define DCIN_STATUS_DELAY 	1000		/* DCIN delay*/
 #define PWRKEY_SKIP_INTERVAL    500             /* in milli-seconds */
 #define BD7181X_BATTERY_CAP_MAH	910
 #define BD7181X_BATTERY_CAP	mAh_A10s(BD7181X_BATTERY_CAP_MAH)
@@ -56,22 +64,45 @@
 #define VBAT_LOW_TH		0x00D4 // 0x00D4*16mV = 212*0.016 = 3.392v 
 
 #define FULL_SOC		1000
-static int debug_soc_enable=1;
+static int debug_soc_enable=0;
+
+/* system reset type (warm or cold). default=cold */
+static bool default_warm_reset;
+
+/*#define DEBUG
+#define pr_debug pr_info*/
 
 #ifdef CONFIG_LAB126
 #define JITTER_CHK_UDC		1000*120 // only check USB UDC every 2 minutes
 extern void usbotg_force_bsession(bool connected);
 extern int usb_udc_connected(void);
 void heisenberg_battery_lobat_event(struct device  *dev, int crit_level);
-static void heisenberg_battery_overheat_event(struct device *dev);
 static void bd7181x_verify_soc_with_vcell(struct bd7181x_power* pwr, int soc_to_verify);
 static struct delayed_work pwrkey_skip_work;		/** delayed work for powerkey skip */
-static struct mutex pwrkey_lock;
+static DEFINE_MUTEX(pwrkey_lock);
+static DEFINE_MUTEX(bd_work_lock);
 static bool heisenberg_pwrkey_press_skip = 0;
-static bool heisenberg_offline_event = 0;
-
 static bool heisenberg_pwrkey_enabled = 0;
+static bool _heisenberg_pwrkey_initialized = 0;
+static int metrics_counter = 0;
+#define METRICS_TIMER_MIN	 30
+#define BATTERY_METRICS_TIMER (METRICS_TIMER_MIN * 20)
+extern int gpio_hallsensor_detect(void);
+bool heisenberg_pwrkey_initialized(void) {
+	return _heisenberg_pwrkey_initialized;
+}
+EXPORT_SYMBOL(heisenberg_pwrkey_initialized);
+extern unsigned long bd7181x_total_suspend_time(void);
+extern unsigned long bd7181x_total_wake_time(void);
+#define POWER_METRIC_LOG_PERIOD	10000 //log metrics every 10000*3 seconds
+
+#ifdef CONFIG_AMAZON_METRICS_LOG
+#define LOG_SYSTEM_WAIT_TIME (1000*120)         /* 120s wait */
+static struct delayed_work log_system_work;	/* delayed work for logging system metrics */
+static void log_system_work_func(struct work_struct *work);
 #endif
+
+#endif /* CONFIG_LAB126 */
 
 #define RS_30mOHM		/* This is for 30mOhm sense resistance */
 
@@ -104,7 +135,8 @@ static bool heisenberg_pwrkey_enabled = 0;
 #define PWRCTRL_NORMAL			0x22
 #define PWRCTRL_RESET			0x23
 /* software reset flag, the PMIC PWRCTRL register (0x1h) bit1 determinate it's cold or warm reset */
-#define SOFT_REBOOT			0xA5
+#define SOFT_REBOOT			0xAA
+#define POWEROFF			0x55
 
 #ifdef CONFIG_LAB126
 //warmreset on watchdog, cold reset on bat cut
@@ -132,19 +164,29 @@ static bool heisenberg_pwrkey_enabled = 0;
 #endif
 #endif
 
+#define SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP(envp_str) \
+{											\
+	char *envp[] = { "BATTERY="envp_str, NULL };					\
+	printk(KERN_INFO "KENREL:pmic:sending battery %s uevent\n", envp_str);		\
+	if (pmic_pwr->bat.dev != NULL)							\
+		kobject_uevent_env(&(pmic_pwr->bat.dev->kobj), KOBJ_CHANGE, envp);	\
+}
+
 u8 events_recorder[TOTAL_IRQ_STATUS_REGS+1];
 u8 errflags;
-bool software_reset = false;
+bool software_reset_flag = false;
+bool power_off_flag = false;
 
-static const char *errorflag_desc[][2] = {
-    { "SOFTWARE_RESTART",   "Software Initiated System Restart"},   /* reserved register0 contains oxA5 */
-    { "WATCHDOG_RST",       "Watchdog Triggered Reset"},            /* Interrupt Status register 3 bit 6 is set */
-    { "PWRON_LONGPRESS",    "Power Button Long Press Battery Cut"}, /* Interrupt Status register 3 bit 2 is set */
-    { "LOW_BAT_SHUTDOWN",   "System Low Battery Shutdown"},         /* Interrupt Status register 4 bit 3 is set */
-    { "THERMAL_SHUTDOWN",   "System Thermal Shutdown"},             /* Interrupt Status register 11 bit 3 is set */
-    { "Reserved1",          "System reset reason reserved 1"},      /* reserved 1 */
-    { "Reserved2",          "System reset reason reserved 1"},      /* reserved 2 */
-    { "Reserved3",          "System reset reason reserved 1"},      /* reserved 3 */
+/* each entry = reset-reason reset-reason-long-description metric-counter-name */
+static const char *errorflag_desc[][3] = {
+  { "SOFTWARE_RESTART",   "Software Shutdown",                "rr_normal"},  /* reserved register0 contains 0xA5 */
+  { "WATCHDOG_RST",       "Watchdog Triggered Reset",         "rr_wdog"},    /* ISR3 bit 6 is set */
+  { "PWRON_LONGPRESS",    "Long Pressed Power Key Shutdown",  "rr_lp"},      /* ISR3 bit 2 is set */
+  { "LOW_BAT_SHUTDOWN",   "Low Battery Shutdown",             "rr_lb"},      /* ISR4 bit 3 is set */
+  { "THERMAL_SHUTDOWN",   "PMIC Overheated Thermal Shutdown", "rr_hot"},     /* ISR11 bit 3 is set */
+  { "POWER_OFF",          "System is powered off",            "rr_pwoff"},   /* system is powered off */
+  { "Reserved1",          "System reset reason reserved 1",   "rr_rsv1"},    /* reserved 1 */
+  { "Reserved2",          "System reset reason reserved 2",   "rr_rsv2"},    /* reserved 2 */
 };
 
 unsigned int battery_cycle=0;
@@ -212,6 +254,9 @@ struct bd7181x_power {
 	struct delayed_work bd_work;			/**< delayed work for timed work */
 	struct delayed_work bd_power_work;		/** delayed work for power work*/
 	struct delayed_work bd_bat_work;		/** delayed work for battery */
+#ifdef CONFIG_PM_AUTOSLEEP
+	struct wakeup_source *vbus_wakeup_source;	/* keep device awake while vbus is present */
+#endif
 	struct int_status_reg irq_status[12];
 
 	int	reg_index;			/**< register address saved for sysfs */
@@ -251,6 +296,7 @@ struct bd7181x_power {
 };
 
 struct bd7181x *pmic_data;
+struct bd7181x_power *pmic_pwr;
 int heisenberg_critbat_event = 0;
 int heisenberg_lobat_event = 0;
 
@@ -264,28 +310,17 @@ enum {
 };
 static int pmic_power_button_event_handler(struct notifier_block * this, unsigned long event, void *ptr)
 {
-	struct bd7181x* mfd = pmic_data;
+	struct input_dev *input = pmic_data->input;
+	int key = (event == EVENT_DCIN_PWRON_PRESS)? 1 : 0;
 
-	if (event == EVENT_DCIN_PWRON_SHORT) {
-		if (heisenberg_pwrkey_press_skip) {
-			printk(KERN_INFO "KERNEL: I pmic:pwrkey:: pwron_short skipped");
-			return 0;
-		}
-		if (heisenberg_offline_event){
-			heisenberg_offline_event = 0;
-		} else {
-			kobject_uevent(&(mfd->dev->kobj), KOBJ_ONLINE);
-			printk(KERN_INFO "Power button pressed, send user event KOBJ_ONLINE\n");
-			pr_debug("The event EVENT_DCIN_PWRON_SHORT 0x%0x happens\n",EVENT_DCIN_PWRON_SHORT);
-		}
+	if (event == EVENT_DCIN_PWRON_SHORT && gpio_hallsensor_detect()) {
+		pr_info("Power button press skipped\n");
+		return 0;
 	}
 
-	if (event == EVENT_DCIN_PWRON_MID) {
-		kobject_uevent(&(mfd->dev->kobj), KOBJ_OFFLINE);
-		heisenberg_offline_event = 1;
-		printk(KERN_INFO "Power button pressed, send user event KOBJ_OFFLINE\n");
-		pr_debug("The event EVENT_DCIN_PWRON_MID 0x%0x happens\n",EVENT_DCIN_PWRON_MID);
-	}
+	/* send the key event */
+	input_event(input, EV_KEY, KEY_POWER, key);
+	input_sync(input);
 
 	return 0;
 }
@@ -309,19 +344,11 @@ static int pmic_temp_event_handler(struct notifier_block * this, unsigned long e
 {
 	struct bd7181x* mfd = pmic_data;
 
-	if (event == EVENT_TMP_OVTMP_DET) {
-		char *envp[] = { "BATTERY=temp_hi", NULL };
-		printk(KERN_CRIT "KERNEL: I pmic:fg battery temperature high event\n");
-		kobject_uevent_env(&(mfd->dev->kobj), KOBJ_CHANGE, envp);
-		printk("\n~~~ Overtemp Detected ... \n");
-	}
+	if (event == EVENT_TMP_OVTMP_DET)
+		SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("temp_hi");
 
-	if (event == EVENT_TMP_LOTMP_DET) {
-		char *envp[] = { "BATTERY=temp_lo", NULL };
-		printk(KERN_CRIT "KERNEL: I pmic:fg battery temperature low event\n");
-		kobject_uevent_env(&(mfd->dev->kobj), KOBJ_CHANGE, envp);
-		printk("\n~~~ Lowtemp Detected ... \n");
-	}
+	if (event == EVENT_TMP_LOTMP_DET)
+		SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("temp_lo");
 
 	return 0;
 }
@@ -483,6 +510,11 @@ static void heisenberg_pwrkey_skip_work(struct work_struct *work)
 
 int heisenberg_pwrkey_ctrl(int enable)
 {
+	if (!_heisenberg_pwrkey_initialized) {
+		printk(KERN_WARNING "%s: Attempt to control power button before driver online\n", __func__);
+		return -1;
+	}
+
         mutex_lock(&pwrkey_lock);
         if (enable && !heisenberg_pwrkey_enabled) {
                 cancel_delayed_work_sync(&pwrkey_skip_work);
@@ -499,13 +531,32 @@ int heisenberg_pwrkey_ctrl(int enable)
         return 0;
 }
 
-static ssize_t pwrkey_ctrl_store(struct device *dev, struct attribute *attr, const char *buf, size_t count)
+#ifdef CONFIG_AMAZON_METRICS_LOG
+/*
+ * log_system_work_func delayed work function
+ * Log system information to system metrics
+ */
+static void log_system_work_func(struct work_struct *work)
 {
+	char metric_buf[BD7181x_METRIC_BUFFER_SIZE] = {0};
+	int i;
 
+	/* log last reset reason to system metrics */
+	for (i = 0; i < 8; i++) {
+		if (errflags & (1 << i)) {
+			snprintf(metric_buf, sizeof(metric_buf) - 1,
+                                 "kernel:pmic-bd7181x:%s=1;CT;1,last_reset_reason=%s;DV;1:NR",
+                                 errorflag_desc[i][2], errorflag_desc[i][0]);
+			log_to_metrics(ANDROID_LOG_INFO, "system", metric_buf);
+		}
+	}
+}
+#endif
+
+static ssize_t pwrkey_ctrl_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
 	int value;
-        struct power_supply *psy = dev_get_drvdata(dev);
-        struct bd7181x_power *pwr = container_of(psy, struct bd7181x_power, bat);
-		
+
 	if (sscanf(buf, "%d", &value) <= 0) {
 		return -EINVAL;
 	}
@@ -895,6 +946,7 @@ static int bd7181x_get_temp(struct bd7181x_power *pwr) {
 	return t;
 }
 
+
 static int bd7181x_reset_coulomb_count(struct bd7181x_power* pwr);
 
 /** @brief get battery charge status
@@ -903,6 +955,7 @@ static int bd7181x_reset_coulomb_count(struct bd7181x_power* pwr);
  */
 static int bd7181x_charge_status(struct bd7181x_power *pwr)
 {
+
 	u8 state;
 	int ret = 1;
 
@@ -960,6 +1013,10 @@ static int bd7181x_charge_status(struct bd7181x_power *pwr)
 	}
 
 	bd7181x_reset_coulomb_count(pwr);
+
+	if (pwr->prev_rpt_status == POWER_SUPPLY_STATUS_FULL
+	    && pwr->rpt_status != POWER_SUPPLY_STATUS_FULL)
+		SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("full");
 
 	pwr->prev_rpt_status = pwr->rpt_status;
 
@@ -1028,10 +1085,10 @@ static int calibration_coulomb_counter(struct bd7181x_power* pwr) {
 static int bd7181x_adjust_coulomb_count(struct bd7181x_power* pwr) {
 	int relax_ocv=0;
 	u32 old_cc;
-	char buf[32];
 	int tmp_curr;
 	relax_ocv = bd7181x_reg_read16(pwr->mfd, BD7181X_REG_REX_SA_VBAT_U) * 1000;
 	dev_info(pwr->dev, "relax_ocv %d\n", relax_ocv);
+
 	if (relax_ocv != 0) {
 		u32 bcap=0;
 		int soc=0;
@@ -1068,9 +1125,17 @@ static int bd7181x_adjust_coulomb_count(struct bd7181x_power* pwr) {
 			__func__, relax_ocv, bcap, soc, pwr->coulomb_cnt, tmp_curr);
 		printk(KERN_ERR "%s: relaxe_ocv:%d, bcap:%d, soc:%d, coulomb_cnt:%d, curr %d\n",
 			__func__, relax_ocv, bcap, soc, pwr->coulomb_cnt, tmp_curr);
-		memset(buf,0,sizeof(buf));
-		snprintf(buf, sizeof(buf)-1, "%d, rex_ocv:%d", abs((int)old_cc - (int)pwr->coulomb_cnt), relax_ocv);
-		LLOG_DEVICE_METRIC(DEVICE_METRIC_LOW_PRIORITY, DEVICE_METRIC_TYPE_COUNTER, "kernel", "pmic-bd7181x", "cc-delta", 1, buf);
+
+#ifdef CONFIG_AMAZON_METRICS_LOG
+
+		memset(bd7181x_metric_buf,0,sizeof(bd7181x_metric_buf));
+                snprintf(bd7181x_metric_buf, sizeof(bd7181x_metric_buf),
+                        "kernel:pmic-bd7181x:cc_delta=%d;CT;1,rex_ocv=%d;CT;1:NR",
+                        abs((int)old_cc - (int)pwr->coulomb_cnt), relax_ocv);
+
+                log_to_metrics(ANDROID_LOG_INFO, "battery", bd7181x_metric_buf);
+#endif
+
 
 		/* Start Coulomb Counter */
 		bd7181x_set_bits(pwr->mfd, BD7181X_REG_CC_CTRL, CCNTENB);
@@ -1100,6 +1165,7 @@ void accelerate_snapshot_2000x(struct bd7181x *mfd)
 	bd7181x_reg_write(mfd, 0xFE, 0x00);
 }
 #endif
+
 
 /** @brief reset coulomb counter values at full charged state
  * @param pwr power device
@@ -1211,8 +1277,7 @@ static int bd7181x_adjust_coulomb_count_sw(struct bd7181x_power* pwr)
 	tmp_curr_mA = pwr->curr / 1000;
 	if ((tmp_curr_mA * tmp_curr_mA) <= (THR_RELAX_CURRENT * THR_RELAX_CURRENT)) { /* No load */
 		pwr->relax_time += (JITTER_DEFAULT / 1000);
-	}
-	else {
+	} else {
 		pwr->relax_time = 0;
 	}
 	
@@ -1323,12 +1388,10 @@ static int bd7181x_calc_full_cap(struct bd7181x_power* pwr) {
 	if (pwr->temp >= BD7181X_DGRD_TEMP_M) {
 		full_cap_uAh += (pwr->temp - BD7181X_DGRD_TEMP_M) * BD7181X_DGRD_TEMP_CAP_H;
 		pwr->full_cap = mAh_A10s(full_cap_uAh / 1000);
-	}
-	else if (pwr->temp >= BD7181X_DGRD_TEMP_L) {
+	} else if (pwr->temp >= BD7181X_DGRD_TEMP_L) {
 		full_cap_uAh += (pwr->temp - BD7181X_DGRD_TEMP_M) * BD7181X_DGRD_TEMP_CAP_M;
 		pwr->full_cap = mAh_A10s(full_cap_uAh / 1000);
-	}
-	else {
+	} else {
 		full_cap_uAh += (BD7181X_DGRD_TEMP_L - BD7181X_DGRD_TEMP_M) * BD7181X_DGRD_TEMP_CAP_M;
 		full_cap_uAh += (pwr->temp - BD7181X_DGRD_TEMP_L) * BD7181X_DGRD_TEMP_CAP_L;
 		pwr->full_cap = mAh_A10s(full_cap_uAh / 1000);
@@ -1380,8 +1443,7 @@ static int bd7181x_calc_soc_norm(struct bd7181x_power* pwr) {
 	mod_coulomb_cnt = (pwr->coulomb_cnt >> 16) - lost_cap;
 	if ((mod_coulomb_cnt > 0) && (pwr->full_cap > 0)) {
 		pwr->soc_norm = mod_coulomb_cnt * 100 /  pwr->full_cap;
-	}
-	else {
+	} else {
 		pwr->soc_norm = 0;
 	}
 	if (pwr->soc_norm > 100) {
@@ -1401,11 +1463,9 @@ int bd7181x_get_ocv(struct bd7181x_power* pwr, int dsoc) {
 
 	if (dsoc > soc_table[0]) {
 		ocv = MAX_VOLTAGE;
-	}
-	else if (dsoc == 0) {
-			ocv = ocv_table[21];
-	}
-	else {
+	} else if (dsoc == 0) {
+		ocv = ocv_table[21];
+	} else {
 		i = 0;
 		while (i < 22) {
 			if ((dsoc <= soc_table[i]) && (dsoc > soc_table[i+1])) {
@@ -1430,7 +1490,7 @@ static int bd7181x_calc_soc(struct bd7181x_power* pwr) {
 
 	pwr->soc = pwr->soc_norm;
 
-	if(debug_soc_enable)
+	if (debug_soc_enable)
 		bd7181x_verify_soc_with_vcell(pwr, pwr->soc*10);
 		
 
@@ -1472,8 +1532,7 @@ static int bd7181x_calc_soc(struct bd7181x_power* pwr) {
 				mod_full_cap = pwr->full_cap - lost_cap2;
 				if ((mod_coulomb_cnt2 > 0) && (mod_full_cap > 0)) {
 					pwr->soc = mod_coulomb_cnt2 * 100 / mod_full_cap;
-				}
-				else {
+				} else {
 					pwr->soc = 0;
 				}
 				dev_info(pwr->dev, "%s() pwr->soc(by load) = %d\n", __func__, pwr->soc);
@@ -1489,8 +1548,7 @@ static int bd7181x_calc_soc(struct bd7181x_power* pwr) {
 	case POWER_SUPPLY_STATUS_NOT_CHARGING:
 		if (pwr->vsys_min <= MIN_VOLTAGE) {
 			pwr->soc = 0;
-		}
-		else {
+		} else {
 			if (pwr->soc == 0) {
 				pwr->soc = 1;
 			}
@@ -1561,7 +1619,7 @@ static int bd7181x_get_online(struct bd7181x_power* pwr) {
 
 /**@ brief bd7181x_set_software_reset_flag
  * @ param none
- * @ this function write the software reset flag (0xA5) into the pmic reserved register 0
+ * @ this function write the software reset flag (0xAA) into the pmic reserved register 0
  * @ return the result of the pmic i2c write operation
  */
 int bd7181x_set_software_reset_flag(void) 
@@ -1570,6 +1628,61 @@ int bd7181x_set_software_reset_flag(void)
 	return bd7181x_reg_write(mfd, BD7181X_REG_RESERVED_0, SOFT_REBOOT);
 }
 EXPORT_SYMBOL(bd7181x_set_software_reset_flag);
+
+/**@ brief bd7181x_set_poweroff_flag
+ * @ param none
+ * @ this function write the software reset flag (0x55) into the pmic reserved register 0
+ * @ return the result of the pmic i2c write operation
+ */
+int bd7181x_set_poweroff_flag(void)
+{
+	struct bd7181x* mfd = pmic_data;
+	return bd7181x_reg_write(mfd, BD7181X_REG_RESERVED_0, POWEROFF);
+}
+EXPORT_SYMBOL(bd7181x_set_poweroff_flag);
+
+/**@ brief bd7181x_set_boot_mode
+ * @ param mode the boot_mode to be set
+ * @ this function write the boot mode into the pmic reserved boot register(B7)
+ * @ return the result of the pmic i2c write operation
+ */
+int bd7181x_set_boot_mode(int boot_mode)
+{
+	struct bd7181x* mfd = pmic_data;
+	return bd7181x_reg_write(mfd, BD7181X_REG_RESERVED_7, boot_mode);
+}
+EXPORT_SYMBOL(bd7181x_set_boot_mode);
+
+/**@ brief bd7181x_get_boot_mode
+ * @ param none
+ * @ this function reads the boot mode from the pmic reserved boot register(B7) and returns it
+ * @ return the value at the pmic reserved boot register(B7), or negative if error
+ */
+int bd7181x_get_boot_mode(void)
+{
+	struct bd7181x* mfd = pmic_data;
+	return bd7181x_reg_read(mfd, BD7181X_REG_RESERVED_7);
+}
+EXPORT_SYMBOL(bd7181x_get_boot_mode);
+
+
+/**@ brief bd7181x_get_battery_mah
+ * @ param none
+ * @ this function return the current battery mah
+ */
+int bd7181x_get_battery_mah(void)
+{
+//	struct bd7181x* mfd = pmic_data;
+//	struct power_supply *psy = dev_get_drvdata(mfd->dev);
+	if (pmic_pwr)
+	{
+		printk(KERN_ERR "FRED: pmic_pwr->clamp_soc:%d, designed_cap:%d\n",pmic_pwr->clamp_soc, pmic_pwr->designed_cap);
+
+		return pmic_pwr->clamp_soc * pmic_pwr->designed_cap/100;
+	} else
+		return 0;
+}
+EXPORT_SYMBOL(bd7181x_get_battery_mah);
 	
 /**@ brief bd7181x_get_events_recorder
  * @ param pwr power device
@@ -1581,7 +1694,6 @@ static int bd7181x_get_events_recorder(struct bd7181x_power *pwr)
 {
 	struct bd7181x *mfd = pwr->mfd;
 	int r;
-	u8 val;
 	int int_status_reg;
 	int i;
 
@@ -1590,12 +1702,20 @@ static int bd7181x_get_events_recorder(struct bd7181x_power *pwr)
 	errflags = 0;
 
 	if (r == SOFT_REBOOT)
-		software_reset = true;
+		software_reset_flag = true;
 	else
-		software_reset =false;
+		software_reset_flag = false;
 
-	if (software_reset)
+	if (r == POWEROFF)
+		power_off_flag =true;
+	else
+		power_off_flag = false;
+
+	if (software_reset_flag)
 		pr_debug("!!!!! The last system restart was initiated by software !!!!!\n");
+
+	if (power_off_flag)
+		pr_debug("!!!!! The system was powered off !!!!!\n");
 
 	int_status_reg = BD7181X_REG_INT_STAT_01;
 
@@ -1619,10 +1739,10 @@ static int bd7181x_get_events_recorder(struct bd7181x_power *pwr)
 	/* clean up the software reset flag register */
 	r = bd7181x_reg_write(mfd, BD7181X_REG_RESERVED_0, 0x00);
 
-	if (software_reset)
+	if (software_reset_flag)
 		errflags |= 1 << 0;  /* set software reset flag bit*/
 
-	if ((events_recorder[3] & BIT(6)) && (!software_reset))
+	if ((events_recorder[3] & BIT(6)) && (!software_reset_flag))
 		errflags |= 1 << 1; /* set watchdog reset flag bit */
 
 	if (events_recorder[3] & BIT(2))
@@ -1634,6 +1754,9 @@ static int bd7181x_get_events_recorder(struct bd7181x_power *pwr)
 	if (events_recorder[11] & BIT(3))
 		errflags |= 1 << 4; /* set reset battery temperature high reset flag bit */
 
+	if (power_off_flag)
+		errflags |= 1 << 5;  /* set power off flag bit*/
+
 	printk(KERN_INFO "errflags = %d\n",errflags);
 
 	for ( i = 0; i < 8; i++) {
@@ -1642,7 +1765,7 @@ static int bd7181x_get_events_recorder(struct bd7181x_power *pwr)
 			printk(KERN_INFO "[RESET REASONS]: %s: %s \n ", errorflag_desc[i][0], errorflag_desc[i][1]);
 		}
 	}
-
+	return 0;
 }
 
 
@@ -1651,23 +1774,23 @@ static void bd7181x_verify_soc_with_vcell(struct bd7181x_power* pwr, int soc_to_
 #ifdef CONFIG_LAB126
 	int curr_vcell_based_soc = 0;
 	curr_vcell_based_soc = bd7181x_voltage_to_capacity(pwr->vcell);
-	if(curr_vcell_based_soc < 0)
-	{
+	if (curr_vcell_based_soc < 0) {
 		curr_vcell_based_soc=0;
 	}
-	if(debug_soc_enable == 2)
+	if (debug_soc_enable == 2) //dump vcell_based_soc and coulumb count based soc every 3 seconds
 		printk(KERN_ERR "curr_vcell_based_soc:%d soc_to_verify:%d\n",curr_vcell_based_soc,soc_to_verify);
 
-			
-	if(abs(curr_vcell_based_soc-soc_to_verify) > 500) //vcell based soc and soc_to_check is off by more than 50%
-	{
-		printk(KERN_ERR "hw_ocv1:%d, hw_ocv2:%d\n",pwr->hw_ocv1, pwr->hw_ocv2);
-		printk(KERN_ERR "coulomb_cnt:%d, designed_cap:%d,full_cap:%d\n",pwr->coulomb_cnt, pwr->designed_cap,pwr->full_cap);
-		printk(KERN_ERR "vsys_min:%d\n",pwr->vsys_min);
-		printk(KERN_ERR "Verify SOC with vcell off margin(500): curr_vcell_based_soc:%d soc_to_verify:%d\n",curr_vcell_based_soc,soc_to_verify);
+	if (debug_soc_enable) {
+		if (abs(curr_vcell_based_soc-soc_to_verify) > 500) {
+			//vcell based soc and soc_to_check is off by more than 50%
+			printk(KERN_ERR "hw_ocv1:%d, hw_ocv2:%d\n",pwr->hw_ocv1, pwr->hw_ocv2);
+			printk(KERN_ERR "coulomb_cnt:%d, designed_cap:%d,full_cap:%d\n",pwr->coulomb_cnt, pwr->designed_cap,pwr->full_cap);
+			printk(KERN_ERR "vsys_min:%d\n",pwr->vsys_min);
+			printk(KERN_ERR "Verify SOC with vcell off margin(500): curr_vcell_based_soc:%d soc_to_verify:%d\n",curr_vcell_based_soc,soc_to_verify);
+		}
 	}
-
 #endif
+	return 0;
 }
 
 /** @brief init bd7181x sub module charger
@@ -1678,7 +1801,6 @@ static int bd7181x_init_hardware(struct bd7181x_power *pwr) {
 	struct bd7181x *mfd = pwr->mfd;
 	int r=0, rtc_year=0;
 	u8 val=0;
-	char buf[32];
 
 	r = bd7181x_reg_write(mfd, BD7181X_REG_DCIN_CLPS, 0x36);
 	rtc_year = bd7181x_reg_read(mfd,BD7181X_REG_YEAR);
@@ -1735,9 +1857,15 @@ static int bd7181x_init_hardware(struct bd7181x_power *pwr) {
 		calibration_coulomb_counter(pwr);
 
 		printk(KERN_INFO "%s hw_ocv1:%d hw_ocv2:%d\n",__func__, pwr->hw_ocv1, pwr->hw_ocv2);
-		memset(buf,0,sizeof(buf));
-		snprintf(buf, sizeof(buf)-1, "%d:%d", pwr->hw_ocv1, pwr->hw_ocv2);
-		LLOG_DEVICE_METRIC(DEVICE_METRIC_LOW_PRIORITY, DEVICE_METRIC_TYPE_COUNTER, "kernel", "pmic-bd7181x", "init_hw ocv:", 1, buf);
+#ifdef CONFIG_AMAZON_METRICS_LOG
+
+		memset(bd7181x_metric_buf,0,sizeof(bd7181x_metric_buf));
+                snprintf(bd7181x_metric_buf, sizeof(bd7181x_metric_buf),
+                        "kernel:pmic-bd7181x:hw_ocv1=%d;CT;1,hw_ocv2=%d;CT;1:NR",
+                        pwr->hw_ocv1, pwr->hw_ocv2);
+
+                log_to_metrics(ANDROID_LOG_INFO, "battery", bd7181x_metric_buf);
+#endif
 
 		/* VBAT Low voltage detection Setting, added by John Zhang*/
 		bd7181x_reg_write16(mfd, BD7181X_REG_ALM_VBAT_TH_U, VBAT_LOW_TH); 
@@ -1790,11 +1918,8 @@ static int bd7181x_init_hardware(struct bd7181x_power *pwr) {
 
 	bd7181x_reg_write(mfd, BD7181x_REG_INT_EN_05, 0x00);
 
-#if defined(CONFIG_LAB126_PRINTK_BUFFER) && defined(WARM_RESET)
-	bd7181x_reg_write(mfd, BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
 #endif
-#endif
-	if(bd7181x_reg_read(pwr->mfd, BD7181X_REG_PWRCTRL) & RESTARTEN) { /* ship mode */
+	if (bd7181x_reg_read(pwr->mfd, BD7181X_REG_PWRCTRL) & RESTARTEN) { /* ship mode */
 		/* Start Coulomb Counter */
 		bd7181x_set_bits(pwr->mfd, BD7181X_REG_CC_CTRL, CCNTENB);
 		dev_dbg(pwr->dev, "%s: Start Coulomb Counter\n", __func__);
@@ -1802,6 +1927,13 @@ static int bd7181x_init_hardware(struct bd7181x_power *pwr) {
 		/* moved from regulator driver.. */
 		bd7181x_clear_bits(pwr->mfd, BD7181X_REG_PWRCTRL, RESTARTEN);
 	}
+
+	if (default_warm_reset)
+		bd7181x_reg_write(mfd, BD7181X_REG_PWRCTRL,
+				  PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
+	else
+		bd7181x_reg_write(mfd, BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL);
+
 	pwr->temp = bd7181x_get_temp(pwr);
 	dev_info(pwr->dev, "Temperature = %d\n", pwr->temp);
 	bd7181x_adjust_coulomb_count(pwr);
@@ -1853,33 +1985,36 @@ static void bd_work_callback(struct work_struct *work)
 {
 	struct bd7181x_power *pwr;
 	struct delayed_work *delayed_work;
-	int status, changed = 0, vbus_changed=0;
-	static int cap_counter = 0;
-	static int chk_udc_counter = 0;
+	int status, bat_changed = 0, vbus_changed = 0;
+	static int chk_udc_counter = 0, power_metric_counter = 0;
+	static int last_soc = 0;
 
-
+	mutex_lock(&bd_work_lock);
 	delayed_work = container_of(work, struct delayed_work, work);
 	pwr = container_of(delayed_work, struct bd7181x_power, bd_work);
 
 	status = bd7181x_reg_read(pwr->mfd, BD7181X_REG_DCIN_STAT);
 	chk_udc_counter++;
 	if (status != pwr->vbus_status) {
-               dev_info(pwr->dev,"DCIN_STAT CHANGED from 0x%X to 0x%X\n", pwr->vbus_status, status);
-               pwr->vbus_status = status;
-	#ifdef CONFIG_LAB126
-               if(status != 0) //DCIN connected
-               {
-                       usbotg_force_bsession(1);
-		       chk_udc_counter = 0;
-               }
-               else
-               {
-                       usbotg_force_bsession(0);
-		       chk_udc_counter = 0;
-               }
-	#endif
+		dev_info(pwr->dev,"DCIN_STAT CHANGED from 0x%X to 0x%X\n", pwr->vbus_status, status);
+		pwr->vbus_status = status;
+#ifdef CONFIG_LAB126
+		if (status != 0) {
+		//DCIN connected
+			usbotg_force_bsession(1);
+			chk_udc_counter = 0;
+#ifdef CONFIG_PM_AUTOSLEEP
+			__pm_stay_awake(pwr->vbus_wakeup_source);
+#endif
+		} else {
+			usbotg_force_bsession(0);
+			chk_udc_counter = 0;
+#ifdef CONFIG_PM_AUTOSLEEP
+			__pm_relax(pwr->vbus_wakeup_source);
+#endif
+		}
+#endif
 
-		changed = 1;
 		vbus_changed = 1;
 	}
 
@@ -1888,14 +2023,14 @@ static void bd_work_callback(struct work_struct *work)
 	if (status != pwr->bat_status) {
 		//printk("BAT_STAT CHANGED from 0x%X to 0x%X\n", pwr->bat_status, status);
 		pwr->bat_status = status;
-		changed = 1;
+		bat_changed = 1;
 	}
 
 	status = bd7181x_reg_read(pwr->mfd, BD7181X_REG_CHG_STATE);
 	if (status != pwr->charge_status) {
 		//printk("CHG_STATE CHANGED from 0x%X to 0x%X\n", pwr->charge_status, status);
 		pwr->charge_status = status;
-		//changed = 1;
+		bat_changed = 1;
 	}
 
 	bd7181x_get_voltage_current(pwr);
@@ -1917,19 +2052,20 @@ static void bd_work_callback(struct work_struct *work)
         } else if (pwr->vsys/1000 <= SYS_LOW_VOLT_THRESH) {
                 heisenberg_battery_lobat_event(pwr->dev, LOW_BATT_VOLT_LEVEL);
         } 
-        if(changed && pwr->charger_online != 0) //DCIN connected
-        {
-	       kobject_uevent(&(pwr->dev->kobj), KOBJ_ADD);
-        }
-        else if(changed && pwr->charger_online == 0)
-        {
-	       kobject_uevent(&(pwr->dev->kobj), KOBJ_REMOVE); 
-        }
-		
-	if (changed || cap_counter++ > JITTER_REPORT_CAP / JITTER_DEFAULT) {
+
+	if (vbus_changed) {
+		if (pwr->charger_online != 0) {
+			//DCIN connected
+			kobject_uevent(&(pwr->dev->kobj), KOBJ_ADD);
+		} else if (pwr->charger_online == 0) {
+			kobject_uevent(&(pwr->dev->kobj), KOBJ_REMOVE);
+		}
 		power_supply_changed(&pwr->ac);
+	}
+
+	if (bat_changed || pwr->soc != last_soc) {
 		power_supply_changed(&pwr->bat);
-		cap_counter = 0;
+		last_soc = pwr->soc;
 	}
 
 	if (pwr->calib_current == CALIB_NORM) {
@@ -1939,22 +2075,45 @@ static void bd_work_callback(struct work_struct *work)
 	}
 	bd7181x_check_charge_full(pwr);
 #ifdef CONFIG_LAB126
-	if(!vbus_changed && (chk_udc_counter * JITTER_DEFAULT >= JITTER_CHK_UDC))
+	if (!vbus_changed && (chk_udc_counter * JITTER_DEFAULT >= JITTER_CHK_UDC)) {
 	//if vbus changed, then we start/stop B session based on the vbus status
 	//if vbus did not change, we check usb udc status every JITTER_CHK_UDC(120 seconds) and disable usb B session if usb is not connected to a host
-	{
-		if(!usb_udc_connected())
-		{
+		if (!usb_udc_connected()) {
 			pr_debug("USB UDC not connected\n");
                		usbotg_force_bsession(0);
-		}
-		else
+		} else
 			pr_debug("USB UDC connected\n");
 		chk_udc_counter = 0; //reset the counter for next time to check the usb udc
 	}
+#ifdef CONFIG_AMAZON_METRICS_LOG
+	power_metric_counter++;
+	if (power_metric_counter >= POWER_METRIC_LOG_PERIOD) {
+		unsigned long total_suspend=bd7181x_total_suspend_time();
+		unsigned long total_wake=bd7181x_total_wake_time();
+		memset(bd7181x_metric_buf,0,sizeof(bd7181x_metric_buf));
+                snprintf(bd7181x_metric_buf, sizeof(bd7181x_metric_buf),
+                        "kernel:pmic-bd7181x:total_suspend_time=%d;CT;1,total_wake_time=%d;CT;1,total_up_time=%d;CT;1:NR",
+			total_suspend, total_wake, total_suspend+total_wake);
+
+                log_to_metrics(ANDROID_LOG_INFO, "battery", bd7181x_metric_buf);
+		power_metric_counter = 0;
+	}
+	metrics_counter ++;
+	if (metrics_counter >= BATTERY_METRICS_TIMER) {
+		metrics_counter = 0;
+		memset(bd7181x_metric_buf,0,sizeof(bd7181x_metric_buf));
+		snprintf(bd7181x_metric_buf, sizeof(bd7181x_metric_buf),
+			"kernel:pmic-bd7181x:battery_capacity=%d;CT;1,battery_voltage=%d;CT;1:NR",
+			pwr->clamp_soc, pwr->vcell);
+
+		log_to_metrics(ANDROID_LOG_INFO, "battery", bd7181x_metric_buf);
+	}
 #endif
-		
-		
+
+#endif
+	mutex_unlock(&bd_work_lock);
+
+	return;
 }
 
 /*
@@ -1977,20 +2136,26 @@ static void pmic_power_button_work(struct work_struct *work)
 
 	mutex_lock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
 
+	if (pwr->irq_status[BD7181X_IRQ_DCIN_03].reg & EVENT_DCIN_PWRON_PRESS) {
+		pr_info("Power button pressed\n");
+		pmic_power_button_notifier_call_chain(EVENT_DCIN_PWRON_PRESS, NULL);
+	}
+
 	if (pwr->irq_status[BD7181X_IRQ_DCIN_03].reg & EVENT_DCIN_PWRON_SHORT) {
-		pr_debug("The event EVENT_DCIN_PWRON_SHORT 0x%0x happens\n",EVENT_DCIN_PWRON_SHORT);
+		pr_info("Power button short pressed\n");
 		pmic_power_button_notifier_call_chain(EVENT_DCIN_PWRON_SHORT, NULL);
 	}
 
 	if (pwr->irq_status[BD7181X_IRQ_DCIN_03].reg & EVENT_DCIN_PWRON_MID) {
-		pr_debug("The event EVENT_DCIN_PWRON_MID 0x%0x happens\n",EVENT_DCIN_PWRON_MID);
+		pr_info("Power button mid pressed\n");
 		pmic_power_button_notifier_call_chain(EVENT_DCIN_PWRON_MID, NULL);
 	}
 
 	if (pwr->irq_status[BD7181X_IRQ_DCIN_03].reg & EVENT_DCIN_PWRON_LONG) {
-		pr_debug("The event EVENT_DCIN_PWRON_LONG 0x%0x happens\n",EVENT_DCIN_PWRON_LONG);
+		pr_info("Power button long pressed\n");
 		pmic_power_button_notifier_call_chain(EVENT_DCIN_PWRON_LONG, NULL);
 	}
+       
 	mutex_unlock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
 
 }
@@ -2030,7 +2195,6 @@ static irqreturn_t bd7181x_power_interrupt(int irq, void *pwrsys)
 	struct device *dev = pwrsys;
 	struct bd7181x *mfd = dev_get_drvdata(dev->parent);
 	struct bd7181x_power *pwr = dev_get_drvdata(dev);
-
 	int reg, r;
 
 	reg = bd7181x_reg_read(mfd, BD7181X_REG_INT_STAT_03);
@@ -2042,20 +2206,24 @@ handle_again:
 	if (r)
 		return IRQ_NONE;
 
-	if (reg & BD7181X_PWRON_PRESSED)
+	if (reg & BD7181X_PWRON_PRESSED) {
 		printk(KERN_INFO "Power button pressed, INT_STAT_03 = 0x%0x \n", reg);
 
-	mutex_lock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
-	pwr->irq_status[BD7181X_IRQ_DCIN_03].reg = (int)reg;
-	mutex_unlock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
+		mutex_lock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
+		pwr->irq_status[BD7181X_IRQ_DCIN_03].reg = (int)reg;
+		mutex_unlock(&pwr->irq_status[BD7181X_IRQ_DCIN_03].lock);
 
-	if (reg & DCIN_MON_DET) {
-		// printk("\n~~~DCIN removed\n");
-	} else if (reg & DCIN_MON_RES) {
-		// printk("\n~~~DCIN inserted\n");
+		//TODO: Check if this really needs to be scheduled in the global work queue.
+		schedule_delayed_work(&pwr->bd_power_work, msecs_to_jiffies(0));
 	}
 
-	schedule_delayed_work(&pwr->bd_power_work, msecs_to_jiffies(0));
+	if (reg & DCIN_MON_DET || reg & DCIN_MON_RES) {
+                /* BD7181X_REG_DCIN_STAT register does not reflect the change immediately, so scheduling bd_work after a delay */
+		if(!schedule_delayed_work(&pwr->bd_work, msecs_to_jiffies(DCIN_STATUS_DELAY))) {
+			cancel_delayed_work(&pwr->bd_work);
+			schedule_delayed_work(&pwr->bd_work, msecs_to_jiffies(DCIN_STATUS_DELAY));
+		}
+	}
 
 	reg = bd7181x_reg_read(mfd, BD7181X_REG_INT_STAT_03);
 	if (reg > 0)
@@ -2090,7 +2258,7 @@ static irqreturn_t bd7181x_vbat_interrupt(int irq, void *pwrsys)
 		return IRQ_NONE;
 
 	mutex_lock(&pwr->irq_status[BD7181X_IRQ_BAT_MON_08].lock);
-	pwr->irq_status[BD7181X_IRQ_DCIN_03].reg = (int)reg;
+	pwr->irq_status[BD7181X_IRQ_BAT_MON_08].reg = (int)reg;
 	mutex_unlock(&pwr->irq_status[BD7181X_IRQ_BAT_MON_08].lock);
 
 	schedule_delayed_work(&pwr->bd_bat_work, msecs_to_jiffies(0));
@@ -2190,6 +2358,26 @@ static irqreturn_t bd7181x_charger_interrupt(int irq, void *pwrsys)
 }
 #endif
 
+static int bd7181x_battery_capacity_level(struct bd7181x_power *pwr, union power_supply_propval *val)
+{
+#define CAPACITY_LEVEL_BATTERY_LOW_THREDSHOLD 10
+
+	int level;
+
+	if (pwr->rpt_status == POWER_SUPPLY_STATUS_FULL) {
+		level = POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+	} else if (pwr->clamp_soc <= CAPACITY_LEVEL_BATTERY_LOW_THREDSHOLD) {
+		level = POWER_SUPPLY_CAPACITY_LEVEL_LOW;
+	} else if (heisenberg_critbat_event || heisenberg_lobat_event) {
+		level = POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
+	} else {
+		level = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+	}
+
+	val->intval = level;
+
+	return 0;
+}
 /** @brief get property of power supply ac
  *  @param psy power supply deivce
  *  @param psp property to get
@@ -2292,10 +2480,13 @@ static int bd7181x_battery_get_property(struct power_supply *psy,
 		val->intval = pwr->bat_online;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		val->intval = pwr->vcell / 1000;
+		val->intval = pwr->vcell;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		val->intval = pwr->clamp_soc;
+		break;
+	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
+		bd7181x_battery_capacity_level(pwr, val);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_NOW:
 		{
@@ -2305,7 +2496,7 @@ static int bd7181x_battery_get_property(struct power_supply *psy,
 		t = A10s_mAh(t);
 		if (t > A10s_mAh(pwr->designed_cap)) 
 			t = A10s_mAh(pwr->designed_cap);
-		val->intval = t ;		/* mA to report */
+		val->intval = t * 1000;		/* uAh to report */
 		}
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
@@ -2315,28 +2506,28 @@ static int bd7181x_battery_get_property(struct power_supply *psy,
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		val->intval = A10s_mAh(pwr->designed_cap) ; //mAh
+		val->intval = A10s_mAh(pwr->designed_cap) * 1000; //uAh
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
-		val->intval = A10s_mAh(pwr->full_cap) ; //mAh
+		val->intval = A10s_mAh(pwr->full_cap) * 1000; //uAh
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		val->intval = pwr->curr_sar / 1000; //mA
+		val->intval = pwr->curr_sar; //uA
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
-		val->intval = pwr->curr / 1000;
+		val->intval = pwr->curr; //uA
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		val->intval = pwr->temp; //C
+		val->intval = pwr->temp * 10; //tenths of deg C
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
-		val->intval = MAX_VOLTAGE / 1000;
+		val->intval = MAX_VOLTAGE;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MIN:
-		val->intval = MIN_VOLTAGE / 1000;
+		val->intval = MIN_VOLTAGE;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
-		val->intval = MAX_CURRENT / 1000;
+		val->intval = MAX_CURRENT;
 		break;
 	default:
 		return -EINVAL;
@@ -2359,6 +2550,7 @@ static enum power_supply_property bd7181x_battery_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
@@ -2448,7 +2640,6 @@ static ssize_t bd7181x_sysfs_set_charging(struct device *dev,
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bd7181x_power *pwr = container_of(psy, struct bd7181x_power, bat);
 	ssize_t ret = 0;
-	unsigned int reg;
 	unsigned int val;
 
 	ret = sscanf(buf, "%x", &val);
@@ -2461,7 +2652,7 @@ static ssize_t bd7181x_sysfs_set_charging(struct device *dev,
 		return count;
 	}
 
-	if(val == 1)
+	if (val == 1)
 		bd7181x_set_bits(pwr->mfd, BD7181X_REG_CHG_SET1, CHG_EN);
 	else
 		bd7181x_clear_bits(pwr->mfd, BD7181X_REG_CHG_SET1, CHG_EN);
@@ -2477,8 +2668,6 @@ static ssize_t bd7181x_sysfs_show_charging(struct device *dev,
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bd7181x_power *pwr = container_of(psy, struct bd7181x_power, bat);
 	int reg_value=0;
-	ssize_t ret = 0;
-	unsigned int reg;
 
 	reg_value = bd7181x_reg_read(pwr->mfd, BD7181X_REG_CHG_SET1);
 
@@ -2524,6 +2713,47 @@ static ssize_t bd7181x_sysfs_show_reset_reasons(struct device *dev,
 static DEVICE_ATTR(reset_reasons, S_IRUGO, bd7181x_sysfs_show_reset_reasons, NULL);
 
 
+#ifdef CONFIG_AMAZON_SIGN_OF_LIFE_BD7181X
+#define DEV_SOL_PROC_NAME   "life_cycle_reason"
+
+static int life_cycle_metrics_show(struct seq_file *m, void *v)
+{
+	u8 i;
+	for ( i = 0; i < 8; i++) {
+		if (errflags & (1<<i)) {
+			seq_printf(m, "%s", errorflag_desc[i][1]);
+			return 0;
+		}
+ 	}
+ 	seq_printf(m, "Life Cycle Reason Not Available");
+ 	return 0;
+}
+
+static int life_cycle_metrics_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, life_cycle_metrics_show, NULL);
+}
+
+static const struct file_operations life_cycle_metrics_proc_fops = {
+	.open = life_cycle_metrics_proc_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static struct proc_dir_entry *life_cycle_metrics_file;
+void life_cycle_metrics_proc_init(void)
+{
+	life_cycle_metrics_file = proc_create(DEV_SOL_PROC_NAME,
+				  0444, NULL, &life_cycle_metrics_proc_fops);
+	if (life_cycle_metrics_file == NULL) {
+		printk(KERN_ERR "%s: Can't create life cycle metrics proc entry\n", __func__);
+	}
+}
+EXPORT_SYMBOL(life_cycle_metrics_proc_init);
+#endif
+
+
 int (*display_temp_fp)(void);
 EXPORT_SYMBOL(display_temp_fp);
 
@@ -2535,7 +2765,7 @@ static ssize_t bd7181x_sysfs_show_battery_id(struct device *dev,
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct bd7181x_power *pwr = container_of(psy, struct bd7181x_power, bat);
 	
-	if(display_temp_fp)
+	if (display_temp_fp)
 		id = !!(abs(display_temp_fp() - bd7181x_get_temp(pwr)) < 15) ;
 	else
 		printk(KERN_ERR "%d %s no display temp", __LINE__, __func__);
@@ -2855,45 +3085,34 @@ void heisenberg_battery_lobat_event(struct device  *dev, int crit_level)
 		__LINE__, __func__, heisenberg_lobat_event, heisenberg_critbat_event);
 	if (!crit_level) {
 		if (!heisenberg_lobat_event) {
-			char *envp[] = { "BATTERY=low", NULL };
-			printk(KERN_CRIT "KERNEL: I pmic:fg battery valrtmin::lowbat event\n");
-			kobject_uevent_env(&(dev->kobj), KOBJ_CHANGE, envp);
+			SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("low");
 			heisenberg_lobat_event = 1;
 		}
 	} else {
 		if (!heisenberg_critbat_event) {
-			char *envp[] = { "BATTERY=critical", NULL };
-			printk(KERN_CRIT "KERNEL: I pmic:fg battery mbattlow::critbat event\n");
-			kobject_uevent_env(&(dev->kobj), KOBJ_CHANGE, envp);
+			SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("critical");
 			heisenberg_critbat_event = 1;
 		}
 	}
 }
 
-static void heisenberg_battery_overheat_event(struct device *dev)
-{
-	struct power_supply *psy = dev_get_drvdata(dev);
-	struct bd7181x_power *pwr = container_of(psy, struct bd7181x_power, bat);
-	char *envp[] = { "BATTERY=overheat", NULL };
-	printk(KERN_CRIT "KERNEL: E pmic:fg battery temp::overheat event temp=%dC\n",
-			pwr->temp);
-	kobject_uevent_env(&(dev->kobj), KOBJ_CHANGE, envp);
-	return;
-}
 #ifdef DEVELOPMENT_MODE
 static ssize_t
 battery_store_send_lobat_uevent(struct device *dev, struct attribute *attr, const char *buf, size_t count)
 {
 	int value;
+	struct bd7181x* mfd = pmic_data;
 
 	if (sscanf(buf, "%d", &value) <= 0) {
 		return -EINVAL;
 	}
 
 	if (value == 1) {
-		heisenberg_battery_lobat_event(dev, 0);
+		heisenberg_battery_lobat_event(mfd->dev, 0);
 	} else if (value == 2) {
-		heisenberg_battery_lobat_event(dev, 1);
+		heisenberg_battery_lobat_event(mfd->dev, 1);
+	} else if (value == 3) {
+		SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("full");
 	} else {
 		return -EINVAL;
 	}
@@ -2911,7 +3130,7 @@ battery_store_send_overheat_uevent(struct device *dev, struct attribute *attr, c
 		return -EINVAL;
 	}
 	if (value > 0) {
-		heisenberg_battery_overheat_event(dev);
+		SEND_BATTERY_KOBJ_UEVENT_WITH_ENVP("overheat");
 	} else {
 		return -EINVAL;
 	}
@@ -2919,6 +3138,7 @@ battery_store_send_overheat_uevent(struct device *dev, struct attribute *attr, c
 }
 static DEVICE_ATTR(send_overheat_uevent, S_IWUSR, NULL, battery_store_send_overheat_uevent);
 
+#endif
 
 static ssize_t
 debug_soc_func(struct device *dev, struct attribute *attr, const char *buf, size_t count)
@@ -2937,7 +3157,6 @@ debug_soc_func(struct device *dev, struct attribute *attr, const char *buf, size
 		printk(KERN_ERR "vsys_min:%d\n",pwr->vsys_min);
 		for(i=0;i<23;i++)
 			printk(KERN_ERR "\t\tsoc_table[%d]=%d\t\tocv_table[%d]=%d\n",i,soc_table[i],i,ocv_table[i]);
-	
 	} else {
 		debug_soc_enable=0;
 		return -EINVAL;
@@ -2945,7 +3164,6 @@ debug_soc_func(struct device *dev, struct attribute *attr, const char *buf, size
 	return count;
 }
 static DEVICE_ATTR(debug_soc, S_IWUSR, NULL, debug_soc_func);
-#endif
 
 
 static ssize_t bd7181x_battery_cycle_show(struct device *dev,
@@ -2956,7 +3174,7 @@ static ssize_t bd7181x_battery_cycle_show(struct device *dev,
 }
 
 static ssize_t
-bd7181x_battery_cycle_store(struct device *dev, struct attribute *attr, const char *buf, size_t count)
+bd7181x_battery_cycle_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 
 	int value;
@@ -2978,8 +3196,19 @@ bd7181x_battery_cycle_store(struct device *dev, struct attribute *attr, const ch
 
 static DEVICE_ATTR(battery_cycle, S_IWUSR | S_IRUGO, bd7181x_battery_cycle_show, bd7181x_battery_cycle_store);
 
+static ssize_t bd7181x_pmic_pwrctrl_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	int reg = 0;
+
+	if (pmic_pwr)
+		reg = bd7181x_reg_read(pmic_pwr->mfd, BD7181X_REG_PWRCTRL);
+	return sprintf(buf, "0x%x\n", reg);
+}
+
 static ssize_t
-bd7181x_watchdog_use_warm_reset(struct device *dev, struct attribute *attr, const char *buf, size_t count)
+bd7181x_watchdog_use_warm_reset(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 
 	int value;
@@ -2989,15 +3218,16 @@ bd7181x_watchdog_use_warm_reset(struct device *dev, struct attribute *attr, cons
 	if (sscanf(buf, "%d", &value) <= 0) {
 		return -EINVAL;
 	}
-	if (value > 0) {
+	if (value) {
 		bd7181x_reg_write(pwr->mfd, BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
 	} else {
-		return -EINVAL;
+		bd7181x_reg_write(pwr->mfd, BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL);
 	}
 	return count;
 }
 
-static DEVICE_ATTR(watchdog_use_warm_reset, S_IWUSR, NULL, bd7181x_watchdog_use_warm_reset);
+static DEVICE_ATTR(watchdog_use_warm_reset, S_IWUSR | S_IRUGO, bd7181x_pmic_pwrctrl_show,
+		   bd7181x_watchdog_use_warm_reset);
 
 static struct attribute *bd7181x_sysfs_attributes[] = {
 	/*
@@ -3010,8 +3240,8 @@ static struct attribute *bd7181x_sysfs_attributes[] = {
 #ifdef DEVELOPMENT_MODE
 	&dev_attr_send_overheat_uevent.attr,
 	&dev_attr_send_lobat_uevent.attr,
-	&dev_attr_debug_soc.attr,
 #endif
+	&dev_attr_debug_soc.attr,
 	&dev_attr_reset_reasons.attr,
 	&dev_attr_battery_id.attr,
 	&dev_attr_battery_cycle.attr,
@@ -3031,40 +3261,41 @@ static char *bd7181x_ac_supplied_to[] = {
 };
 
 /* called from pm inside machine_halt */
-void bd7181x_chip_hibernate(void) {
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_H, BD7181X_REG_BUCK1_VOLT_H_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_L, BD7181X_REG_BUCK1_VOLT_L_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_H,BD7181X_REG_BUCK2_VOLT_H_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_L,BD7181X_REG_BUCK2_VOLT_L_DEFAULT);
-		/* Disable Coulomb Counter before entring ship mode*/
-        ext_bd7181x_reg_write8(BD7181X_REG_CC_CTRL,0x0);
-#if defined(CONFIG_LAB126_PRINTK_BUFFER) && defined(WARM_RESET)
+void bd7181x_chip_hibernate (void) {
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_H, BD7181X_REG_BUCK1_VOLT_H_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_L, BD7181X_REG_BUCK1_VOLT_L_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_H,BD7181X_REG_BUCK2_VOLT_H_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_L,BD7181X_REG_BUCK2_VOLT_L_DEFAULT);
+    /* Disable Coulomb Counter before entring ship mode*/
+    ext_bd7181x_reg_write8(BD7181X_REG_CC_CTRL,0x0);
+
+    if (default_warm_reset) {
 	/* programming sequence in EANAB-151 */
 	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
 	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET_BATCUT_COLDRST_WDG_WARMRST);
-#else
+    } else {
 	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL);
 	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET);
-#endif
-	
+    }
 }
 
 /* called from pm inside machine_power_off */
 void bd7181x_chip_poweroff() {
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_H, BD7181X_REG_BUCK1_VOLT_H_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_L, BD7181X_REG_BUCK1_VOLT_L_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_H,BD7181X_REG_BUCK2_VOLT_H_DEFAULT);
-        ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_L,BD7181X_REG_BUCK2_VOLT_L_DEFAULT);
-		/* Disable Coulomb Counter before entering ship mode*/
-        ext_bd7181x_reg_write8(BD7181X_REG_CC_CTRL,0x0);
-		
-#if defined(CONFIG_LAB126_PRINTK_BUFFER) && defined(WARM_RESET)
-	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
-	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET_BATCUT_COLDRST_WDG_WARMRST);
-#else
-	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL);
-	ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET);
-#endif
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_H, BD7181X_REG_BUCK1_VOLT_H_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK1_VOLT_L, BD7181X_REG_BUCK1_VOLT_L_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_H,BD7181X_REG_BUCK2_VOLT_H_DEFAULT);
+    ext_bd7181x_reg_write8(BD7181X_REG_BUCK2_VOLT_L,BD7181X_REG_BUCK2_VOLT_L_DEFAULT);
+    /* Disable ALM0 RTC interrupts in shutdown */
+    ext_bd7181x_reg_write8(BD7181X_REG_ALM0_MASK,0x0);
+    /* Disable Coulomb Counter before entering ship mode*/
+    ext_bd7181x_reg_write8(BD7181X_REG_CC_CTRL,0x0);
+    if (default_warm_reset) {
+      ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL_BATCUT_COLDRST_WDG_WARMRST);
+      ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET_BATCUT_COLDRST_WDG_WARMRST);
+    } else {
+      ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_NORMAL);
+      ext_bd7181x_reg_write8(BD7181X_REG_PWRCTRL, PWRCTRL_RESET);
+    }
 }
 
 /** @brief probe pwr device 
@@ -3074,6 +3305,8 @@ void bd7181x_chip_poweroff() {
  */
 static int __init bd7181x_power_probe(struct platform_device *pdev)
 {
+       struct input_dev *input = NULL;  /* for Android */
+
 	struct bd7181x *bd7181x = dev_get_drvdata(pdev->dev.parent);
 	struct bd7181x_power *pwr;
 	int irq, ret;
@@ -3083,7 +3316,7 @@ static int __init bd7181x_power_probe(struct platform_device *pdev)
 	pwr = kzalloc(sizeof(*pwr), GFP_KERNEL);
 	if (pwr == NULL)
 		return -ENOMEM;
-
+	pmic_pwr = pwr;
 	pwr->dev = &pdev->dev;
 	pwr->mfd = bd7181x;
 
@@ -3147,11 +3380,6 @@ static int __init bd7181x_power_probe(struct platform_device *pdev)
 
 	for (i=0; i < BD7181X_IRQ_ALARM_12; i++) 
 		mutex_init(&pwr->irq_status[i].lock);
-
-	mutex_init(&pwrkey_lock);
-	
-	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_power_button_notifier_chain);
-	ATOMIC_INIT_NOTIFIER_HEAD(&pmic_battery_notifier_chain);
 
 	register_power_button_notifier();
 	register_battery_notifier();
@@ -3249,6 +3477,49 @@ static int __init bd7181x_power_probe(struct platform_device *pdev)
 
 	pwr->reg_index = -1;
 
+       /* Android hook up */
+       input = devm_input_allocate_device(&pdev->dev);
+       if (!input) {
+               dev_err(&pdev->dev, "failed to allocate the input device\n");
+               goto err_input;
+       }
+
+       input->name = pdev->name;
+       input->phys = "pwrkey/input0";
+       input->id.bustype = BUS_HOST;
+       input->evbit[0] = BIT_MASK(EV_KEY);
+
+       input_set_capability(input, EV_KEY, KEY_POWER/*116*/);
+
+       ret = input_register_device(input);
+       if (ret < 0) {
+               dev_err(&pdev->dev, "failed to register input device\n");
+               input_free_device(input);
+               goto err_input;
+       }
+
+       bd7181x->input = input;
+
+#ifdef CONFIG_AMAZON_SIGN_OF_LIFE_BD7181X
+	life_cycle_metrics_proc_init();
+#endif
+
+#ifdef CONFIG_PM_AUTOSLEEP
+	pwr->vbus_wakeup_source = wakeup_source_register(BD7181x_VBUS_WAKE_LOCK_NAME);
+	if (pwr->vbus_wakeup_source == NULL) {
+	       dev_err(&pdev->dev, "failed to register wakeup source\n");
+	}
+#endif
+
+#ifdef CONFIG_AMAZON_METRICS_LOG
+	metrics_counter = 0;
+	/* schedule the log_system_work work. This is meant to only run once */
+	INIT_DELAYED_WORK(&log_system_work, log_system_work_func);
+	schedule_delayed_work(&log_system_work, msecs_to_jiffies(LOG_SYSTEM_WAIT_TIME));
+#endif
+
+err_input:
+       
 	/* Schedule timer to check current status */
 	pwr->calib_current = CALIB_NORM;
 	schedule_delayed_work(&pwr->bd_work, msecs_to_jiffies(0));
@@ -3256,7 +3527,8 @@ static int __init bd7181x_power_probe(struct platform_device *pdev)
 	pm_power_hibernate = bd7181x_chip_hibernate;
 
 	heisenberg_pwrkey_enabled = 1;
-
+	_heisenberg_pwrkey_initialized = 1;
+	
 	return 0;
 
       //error_exit:
@@ -3296,11 +3568,29 @@ static int __exit bd7181x_power_remove(struct platform_device *pdev)
 	cancel_delayed_work(&pwr->bd_bat_work);
 	cancel_delayed_work(&pwrkey_skip_work);
 
+#ifdef CONFIG_PM_AUTOSLEEP
+	wakeup_source_unregister(pwr->vbus_wakeup_source);
+#endif
+	input_unregister_device(pwr->mfd->input); /* Android */
+
 	power_supply_unregister(&pwr->bat);
 	power_supply_unregister(&pwr->ac);
 	platform_set_drvdata(pdev, NULL);
 	kfree(pwr);
+	pmic_pwr = NULL;
 
+	_heisenberg_pwrkey_initialized = 0;
+
+	return 0;
+}
+
+static int bd7181x_resume(struct platform_device* pdev){
+
+	struct bd7181x_power *pwr = platform_get_drvdata(pdev);
+	if(!schedule_delayed_work(&pwr->bd_work, msecs_to_jiffies(0))) {
+		cancel_delayed_work(&pwr->bd_work);
+		schedule_delayed_work(&pwr->bd_work, msecs_to_jiffies(0));
+	}
 	return 0;
 }
 
@@ -3309,6 +3599,8 @@ static struct platform_driver bd7181x_power_driver = {
 		   .name = "bd7181x-power",
 		   .owner = THIS_MODULE,
 		   },
+
+        .resume = bd7181x_resume,
 	.remove = __exit_p(bd7181x_power_remove),
 };
 
@@ -3343,7 +3635,7 @@ static int onetime = 0;
 static ssize_t bd7181x_proc_read (struct file *file, char __user *buffer, size_t count, loff_t *data)
 {
 	int ret = 0, error = 0;
-	if(onetime==0) {
+	if (onetime==0) {
 		onetime = 1;
 		memset( procfs_buffer, 0, BD7181X_BUF_SIZE);
 		sprintf(procfs_buffer, "%s", BD7181X_REV);

@@ -10,6 +10,7 @@ if ANDROID
 
 config ANDROID_BINDER_IPC
 	bool "Android Binder IPC Driver"
+	depends on MMU
 	default n
 	---help---
 	  Binder is used in Android for both communication between processes,
@@ -18,6 +19,14 @@ config ANDROID_BINDER_IPC
 	  This means one Android process can call a method/routine in another
 	  Android process, using Binder to identify, invoke and pass arguments
 	  between said processes.
+
+config ANDROID_BINDER_IPC_32BIT
+	bool "Use old 32-bit binder api"
+        default y
+	depends on !64BIT && ANDROID_BINDER_IPC
+	---help---
+	  Enable to support an old 32-bit Android user-space. Breaks the new
+	  Android user-space.
 
 config ASHMEM
 	bool "Enable the Anonymous Shared Memory Subsystem"
@@ -63,6 +72,15 @@ config ANDROID_LOW_MEMORY_KILLER
 	---help---
 	  Registers processes to be killed when memory is low
 
+config ANDROID_LOW_MEMORY_KILLER_AUTODETECT_OOM_ADJ_VALUES
+	bool "Android Low Memory Killer: detect oom_adj values"
+	depends on ANDROID_LOW_MEMORY_KILLER
+	default y
+	---help---
+	  Detect oom_adj values written to
+	  /sys/module/lowmemorykiller/parameters/adj and convert them
+	  to oom_score_adj values.
+
 config ANDROID_INTF_ALARM_DEV
 	bool "Android alarm driver"
 	depends on RTC_CLASS
@@ -72,11 +90,22 @@ config ANDROID_INTF_ALARM_DEV
 	  elapsed realtime, and a non-wakeup alarm on the monotonic clock.
 	  Also exports the alarm interface to user-space.
 
+config AMAZON_METRICS_LOG
+	bool "Amazon metrics logging support"
+	depends on ANDROID_LOGGER
+	default y
+	help
+	  Enables a new metrics log for collecting
+	  metrics information.
+
+	  These logs will be present at
+	  /dev/log/metrics.
+
 config SYNC
 	bool "Synchronization framework"
 	default n
 	select ANON_INODES
-	help
+	---help---
 	  This option enables the framework for synchronization between multiple
 	  drivers.  Sync implementations can take advantage of hardware
 	  synchronization built into devices like GPUs.
@@ -85,7 +114,7 @@ config SW_SYNC
 	bool "Software synchronization objects"
 	default n
 	depends on SYNC
-	help
+	---help---
 	  A sync object driver that uses a 32bit counter to coordinate
 	  syncrhronization.  Useful when there is no hardware primitive backing
 	  the synchronization.
@@ -94,10 +123,24 @@ config SW_SYNC_USER
 	bool "Userspace API for SW_SYNC"
 	default n
 	depends on SW_SYNC
-	help
+	---help---
 	  Provides a user space API to the sw sync object.
 	  *WARNING* improper use of this can result in deadlocking kernel
 	  drivers from userspace.
+
+config AMAZON_LOG
+	bool "Amazon Log"
+	default y
+	depends on ANDROID_LOGGER
+	---help---
+	  Create a special Amazon Log area for all Amazon applications
+
+config AMAZON_LOGD
+	bool "Amazon Logd"
+	depends on ANDROID_LOGGER
+	default N
+	---help---
+	device uses logd for logging
 
 source "drivers/staging/android/ion/Kconfig"
 

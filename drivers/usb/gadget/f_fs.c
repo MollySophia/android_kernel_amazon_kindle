@@ -1378,7 +1378,7 @@ static int functionfs_bind(struct ffs_data *ffs, struct usb_composite_dev *cdev)
 		 || test_and_set_bit(FFS_FL_BOUND, &ffs->flags)))
 		return -EBADFD;
 
-	first_id = usb_string_ids_n(cdev, ffs->strings_count);
+	first_id = usb_reusable_string_ids_n(cdev, ffs->strings_count);
 	if (unlikely(first_id < 0))
 		return first_id;
 

@@ -32,7 +32,8 @@
 #define DRIVER_VER "2.0"
 #define DRIVER_INFO "Board ID and Serial Number driver for Lab126 boards version " DRIVER_VER
 
-#define BOARDID_USID_PROCNAME		"usid"
+#define PROC_IDME_DIRNAME	    	"idme"
+#define BOARDID_USID_PROCNAME		"serial"
 #define BOARDID_FSN_PROCNAME		"fsn"
 #define BOARDID_PROCNAME_BOARDID	"board_id"
 #define BOARDID_PROCNAME_PANELID	"panel_id"
@@ -41,20 +42,26 @@
 #define BOARDID_PROCNAME_MACSEC		"mac_sec"
 #define BOARDID_PROCNAME_BOOTMODE	"bootmode"
 #define BOARDID_PROCNAME_POSTMODE	"postmode"
-#define BOARDID_PROCNAME_BTMACADDR	"btmac_addr"
+#define BOARDID_PROCNAME_BTMACADDR	"bt_mac_addr"
 //#ifdef CONFIG_FALCON
 #define BOARDID_PROCNAME_OLDBOOT	"oldboot"
 #define BOARDID_PROCNAME_QBCOUNT	"qbcount"
 //#endif
+#define SYSTEM_USER_UID 1000
 
 #define BOARDID_PROCNAME_VCOM	"vcom"
 #define BOARDID_PROCNAME_MFGDATE	"mfgdate"
+
+#define BOARDID_PROCNAME_FOS_FLAGS	"fos_flags"
+#define BOARDID_PROCNAME_DEV_FLAGS	"dev_flags"
+#define BOARDID_PROCNAME_USR_FLAGS	"usr_flags"
 
 #define SERIAL_NUM_SIZE         16
 #define FSN_NUM_SIZE            13
 #define BOARD_ID_SIZE           16
 #define PANEL_ID_SIZE           32
 #define MFG_DATE_SIZE           8
+#define FLAGS_SIZE              20
 
 #ifndef MIN
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
@@ -94,6 +101,17 @@ EXPORT_SYMBOL(lab126_vcom);
 
 char lab126_mfg_date[MFG_DATE_SIZE + 1];
 EXPORT_SYMBOL(lab126_mfg_date);
+
+
+char lab126_fos_flags[FLAGS_SIZE + 1];
+EXPORT_SYMBOL(lab126_fos_flags);
+
+char lab126_dev_flags[FLAGS_SIZE + 1];
+EXPORT_SYMBOL(lab126_dev_flags);
+
+char lab126_usr_flags[FLAGS_SIZE + 1];
+EXPORT_SYMBOL(lab126_usr_flags);
+
 
 int lab126_board_is(char *id) {
     return (BOARD_IS_(lab126_board_id, id, strlen(id)));
@@ -204,6 +222,23 @@ static ssize_t proc_mfgdate_read(struct file *file, char __user *buf,size_t coun
         return PROC_ID_READ(lab126_mfg_date);
 }
 
+
+static ssize_t proc_fos_flags_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+{
+        return PROC_ID_READ(lab126_fos_flags);
+}
+
+static ssize_t proc_dev_flags_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+{
+        return PROC_ID_READ(lab126_dev_flags);
+}
+
+static ssize_t proc_usr_flags_read(struct file *file, char __user *buf,size_t count, loff_t *off)
+{
+        return PROC_ID_READ(lab126_usr_flags);
+}
+
+
 static const struct file_operations proc_usid_fops = {
  .owner = THIS_MODULE, 
  .read  = proc_usid_read,
@@ -286,6 +321,26 @@ static const struct file_operations proc_mfgdate_fops = {
  .write = NULL,
 };
 
+
+static const struct file_operations proc_fos_flags_fops = {
+ .owner = THIS_MODULE, 
+ .read  = proc_fos_flags_read,
+ .write = NULL,
+};
+
+static const struct file_operations proc_dev_flags_fops = {
+ .owner = THIS_MODULE, 
+ .read  = proc_dev_flags_read,
+ .write = NULL,
+};
+
+static const struct file_operations proc_usr_flags_fops = {
+ .owner = THIS_MODULE, 
+ .read  = proc_usr_flags_read,
+ .write = NULL,
+};
+
+
 int bootmode_is_diags(void)
 {
 	return (strncmp(lab126_bootmode, "diags", 5) == 0);
@@ -300,21 +355,29 @@ int __init lab126_idme_vars_init(void)
 	unsigned char *temp;
 
 	/* initialize the proc accessors */
-	struct proc_dir_entry *proc_usid = proc_create(BOARDID_USID_PROCNAME, S_IRUGO, NULL,&proc_usid_fops);
-	struct proc_dir_entry *proc_fsn = proc_create(BOARDID_FSN_PROCNAME, S_IRUGO, NULL,&proc_fsn_fops);
-	struct proc_dir_entry *proc_board_id = proc_create(BOARDID_PROCNAME_BOARDID, S_IRUGO, NULL,&proc_board_id_fops);
-	struct proc_dir_entry *proc_panel_id = proc_create(BOARDID_PROCNAME_PANELID, S_IRUGO, NULL,&proc_panel_id_fops);
-	struct proc_dir_entry *proc_mac_address = proc_create(BOARDID_PROCNAME_MACADDR, S_IRUGO, NULL,&proc_mac_address_fops);
-	struct proc_dir_entry *proc_mac_secret = proc_create(BOARDID_PROCNAME_MACSEC, S_IRUGO, NULL,&proc_mac_secret_fops);
-	struct proc_dir_entry *proc_btmac_address = proc_create(BOARDID_PROCNAME_BTMACADDR, S_IRUGO, NULL,&proc_btmac_address_fops);
-	struct proc_dir_entry *proc_bootmode = proc_create(BOARDID_PROCNAME_BOOTMODE, S_IRUGO, NULL,&proc_bootmode_fops);
-	struct proc_dir_entry *proc_postmode = proc_create(BOARDID_PROCNAME_POSTMODE, S_IRUGO, NULL,&proc_postmode_fops);
+	struct proc_dir_entry *idme_dir = proc_mkdir(PROC_IDME_DIRNAME, NULL);
 
-	struct proc_dir_entry *proc_oldboot = proc_create(BOARDID_PROCNAME_OLDBOOT, S_IRUGO, NULL,&proc_oldboot_fops);
-	struct proc_dir_entry *proc_qbcount = proc_create(BOARDID_PROCNAME_QBCOUNT, S_IRUGO, NULL,&proc_qbcount_fops);
+	struct proc_dir_entry *proc_usid = proc_create(BOARDID_USID_PROCNAME, S_IRUGO, idme_dir,&proc_usid_fops);
+	struct proc_dir_entry *proc_fsn = proc_create(BOARDID_FSN_PROCNAME, S_IRUGO, idme_dir,&proc_fsn_fops);
+	struct proc_dir_entry *proc_board_id = proc_create(BOARDID_PROCNAME_BOARDID, S_IRUGO, idme_dir,&proc_board_id_fops);
+	struct proc_dir_entry *proc_panel_id = proc_create(BOARDID_PROCNAME_PANELID, S_IRUGO, idme_dir,&proc_panel_id_fops);
+	struct proc_dir_entry *proc_mac_address = proc_create(BOARDID_PROCNAME_MACADDR, S_IRUGO, idme_dir,&proc_mac_address_fops);
+	struct proc_dir_entry *proc_mac_secret = proc_create(BOARDID_PROCNAME_MACSEC, S_IRUSR, idme_dir,&proc_mac_secret_fops);
+	proc_set_user(proc_mac_secret, SYSTEM_USER_UID, 0);
 
-	struct proc_dir_entry *proc_vcom = proc_create(BOARDID_PROCNAME_VCOM, S_IRUGO, NULL,&proc_vcom_fops);
-	struct proc_dir_entry *proc_mfgdate = proc_create(BOARDID_PROCNAME_MFGDATE, S_IRUGO, NULL,&proc_mfgdate_fops);
+	struct proc_dir_entry *proc_btmac_address = proc_create(BOARDID_PROCNAME_BTMACADDR, S_IRUGO, idme_dir,&proc_btmac_address_fops);
+	struct proc_dir_entry *proc_bootmode = proc_create(BOARDID_PROCNAME_BOOTMODE, S_IRUGO, idme_dir,&proc_bootmode_fops);
+	struct proc_dir_entry *proc_postmode = proc_create(BOARDID_PROCNAME_POSTMODE, S_IRUGO, idme_dir,&proc_postmode_fops);
+
+	struct proc_dir_entry *proc_oldboot = proc_create(BOARDID_PROCNAME_OLDBOOT, S_IRUGO, idme_dir,&proc_oldboot_fops);
+	struct proc_dir_entry *proc_qbcount = proc_create(BOARDID_PROCNAME_QBCOUNT, S_IRUGO, idme_dir,&proc_qbcount_fops);
+
+	struct proc_dir_entry *proc_vcom = proc_create(BOARDID_PROCNAME_VCOM, S_IRUGO, idme_dir,&proc_vcom_fops);
+	struct proc_dir_entry *proc_mfgdate = proc_create(BOARDID_PROCNAME_MFGDATE, S_IRUGO, idme_dir,&proc_mfgdate_fops);
+
+	struct proc_dir_entry *proc_fos_flags = proc_create(BOARDID_PROCNAME_FOS_FLAGS, S_IRUGO, idme_dir,&proc_fos_flags_fops);
+	struct proc_dir_entry *proc_dev_flags = proc_create(BOARDID_PROCNAME_DEV_FLAGS, S_IRUGO, idme_dir,&proc_dev_flags_fops);
+	struct proc_dir_entry *proc_usr_flags = proc_create(BOARDID_PROCNAME_USR_FLAGS, S_IRUGO, idme_dir,&proc_usr_flags_fops);
 
 	
 	/* Initialize the idme values */
@@ -409,6 +472,20 @@ int __init lab126_idme_vars_init(void)
 	strcpy(lab126_mfg_date,temp) ;
 	lab126_mfg_date[sizeof(lab126_mfg_date)-1] = '\0';
 	
+
+	of_property_read_string(node, "fos_flags", &temp);
+	strcpy(lab126_fos_flags,temp) ;
+	lab126_fos_flags[sizeof(lab126_fos_flags)-1] = '\0';
+
+	of_property_read_string(node, "dev_flags", &temp);
+	strcpy(lab126_dev_flags,temp) ;
+	lab126_dev_flags[sizeof(lab126_dev_flags)-1] = '\0';
+
+	of_property_read_string(node, "usr_flags", &temp);
+	strcpy(lab126_usr_flags,temp) ;
+	lab126_usr_flags[sizeof(lab126_usr_flags)-1] = '\0';
+
+
 	printk ("LAB126 Board id - %s\n", lab126_board_id);
 
 	return 0;
@@ -417,7 +494,7 @@ int __init lab126_idme_vars_init(void)
 EXPORT_SYMBOL(lab126_idme_vars_init);
 /* Inits boardid if in case some kernel initialization code needs it
  * before idme is initialised;
- * right now mx6_cpu_op_init needs it for BOURBON-237 */
+ * right now mx6_cpu_op_init needs it for abc123-237 */
 void __init early_init_lab126_board_id(void)
 {
 	int r;

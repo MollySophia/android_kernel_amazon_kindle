@@ -35,6 +35,10 @@ struct shrinker {
 	/* These are for internal use */
 	struct list_head list;
 	atomic_long_t nr_in_batch; /* objs pending delete */
+	unsigned long (*count_objects)(struct shrinker *,
+				       struct shrink_control *sc);
+	unsigned long (*scan_objects)(struct shrinker *,
+				      struct shrink_control *sc);
 };
 #define DEFAULT_SEEKS 2 /* A good number if you don't know better. */
 extern void register_shrinker(struct shrinker *);

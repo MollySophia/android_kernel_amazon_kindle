@@ -406,8 +406,9 @@ static int __device_attach(struct device_driver *drv, void *data)
 {
 	struct device *dev = data;
 
-	if (!driver_match_device(drv, dev))
+	if (!driver_match_device(drv, dev)) {
 		return 0;
+	}
 
 	return driver_probe_device(drv, dev);
 }

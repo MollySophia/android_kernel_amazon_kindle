@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_android.h 490106 2014-07-09 12:35:17Z $
+ * $Id: wl_android.h 487838 2014-06-27 05:51:44Z $
  */
 
 #include <linux/module.h>
@@ -31,11 +31,16 @@
 /* If any feature uses the Generic Netlink Interface, put it here to enable WL_GENL
  * automatically
  */
-#if defined(WL_NAN)
+#if defined(BT_WIFI_HANDOVER) || defined(WL_NAN)
 #define WL_GENL
 #endif
 
-
+#ifdef LAB126_SUPPORT_CUSTOM_PKTFILTER
+extern int net_os_rxfilter_add_custom_config(struct net_device *dev,
+			char *extra, int len, int total_len, char *command);
+extern int net_os_rxfilter_del_custom_config(struct net_device *dev,
+			char *extra, int len);
+#endif
 
 /**
  * Android platform dependent functions, feel free to add Android specific functions here
@@ -53,6 +58,7 @@ void wl_android_post_init(void);
 int wl_android_wifi_on(struct net_device *dev);
 int wl_android_wifi_off(struct net_device *dev);
 int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd);
+int wl_handle_private_cmd(struct net_device *net, char *command, u32 cmd_len);
 
 s32 wl_netlink_send_msg(int pid, int type, int seq, void *data, size_t size);
 

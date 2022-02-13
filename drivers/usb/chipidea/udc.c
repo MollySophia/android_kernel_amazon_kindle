@@ -1630,8 +1630,16 @@ static int ci_udc_pullup(struct usb_gadget *_gadget, int is_on)
 	if (!ci->vbus_active)
 		return -EOPNOTSUPP;
 
-	if (is_on)
-		hw_write(ci, OP_USBCMD, USBCMD_RS, USBCMD_RS);
+	if (is_on) {
+		// If current state is suspended, reset and pullup D+ to trigger enumeration
+		if (_gadget->state == USB_STATE_SUSPENDED && hw_read_otgsc(ci, OTGSC_BSV)) {
+			printk(KERN_INFO "%s:%d Device is in suspended state\n",__FUNCTION__,__LINE__);
+			pm_runtime_put_sync(&_gadget->dev);
+			ci_gadget_connect(_gadget, 1);
+		}
+		else
+			hw_write(ci, OP_USBCMD, USBCMD_RS, USBCMD_RS);
+	}
 	else
 		hw_write(ci, OP_USBCMD, USBCMD_RS, 0);
 

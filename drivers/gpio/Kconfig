@@ -184,6 +184,11 @@ config GPIO_MXC
 	select GPIO_GENERIC
 	select GENERIC_IRQ_CHIP
 
+config GPIO_DUMMY_CD
+	def_bool y
+	select GPIO_GENERIC
+	select GENERIC_IRQ_CHIP
+
 config GPIO_MXS
 	def_bool y
 	depends on ARCH_MXS
