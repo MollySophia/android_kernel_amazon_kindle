@@ -1,0 +1,24 @@
+* Amazon Dummy GPIO Controller
+* This device emulates a card detect gpio for an mmc sdio card. This is useful in
+* cases where platform does not have a spare gpio for card detection or the card
+* itself is non-removable. It emulates a single gpio bank with a single line and
+* an irq controller with a single irq assigned to the corresponding gpio.
+
+Required properties:
+-compatible : Should be "amazon,dummy_cd"
+-emul-cd-gpio : some other gpio such as power gpio that can be used
+		to detect card presence
+- gpio-controller : Marks the device node as a gpio controller.
+- #gpio-cells : Should be zero since we emulate just one dummy gpio
+- interrupt-controller: Marks the device node as an interrupt controller.
+
+Example:
+
+gpio_cd: gpio-dummy-cd {
+	compatible = "amazon,dummy_cd";
+	/* Emulate dummy cd based on on/off gpio */
+	emul-cd-gpio = <&gpio2 18 0>;
+	gpio-controller;
+	#gpio-cells = <0>;
+	interrupt-controller;
+};
