@@ -29,6 +29,12 @@
 		status = "okay";		
 	};
 
+	imx_ion {
+		compatible = "fsl,mxc-ion";
+		fsl,heap-id = <0>;
+		fsl,heap-cacheable = <1>;
+	};
+
 	regulator-virtuals {
 		compatible = "simple-bus";
 
