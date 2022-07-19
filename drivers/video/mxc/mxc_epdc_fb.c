@@ -518,7 +518,6 @@ static int pxp_complete_update(struct mxc_epdc_fb_data *fb_data, u32 *hist_stat)
 static int draw_mode0(struct mxc_epdc_fb_data *fb_data);
 static bool is_free_list_full(struct mxc_epdc_fb_data *fb_data);
 
-#if 0
 static void do_dithering_processing_Y1_v1_0(
 		unsigned char *update_region_ptr,
 		struct mxcfb_rect *update_region,
@@ -534,7 +533,6 @@ static void do_dithering_processing_Y4_v1_0(
 		struct mxcfb_rect *update_region,
 		unsigned long update_region_stride,
 		int *err_dist, int reaglWfm);
-#endif
 
 static void dump_epdc_reg(void)
 {
@@ -2969,8 +2967,6 @@ static void epdc_submit_work_func(struct work_struct *work)
 		&upd_data_list->update_desc->upd_data.update_region,
 		&adj_update_region);
 
-#if 0
-
 	/*
 	 * Dithering Processing (Version 1.0 - for i.MX508 and i.MX6SL)
 	 */
@@ -2997,7 +2993,7 @@ static void epdc_submit_work_func(struct work_struct *work)
 				adj_update_region.width,
 				fb_data->dither_err_dist, (fb_data->buf_pix_fmt == EPDC_FORMAT_BUF_PIXEL_FORMAT_P5N) ? 1 : 0);
 	}
-#endif
+
 	/*
 	 * Is the working buffer idle?
 	 * If the working buffer is busy, we must wait for the resource
@@ -4257,16 +4253,16 @@ static void do_paused_update(struct mxc_epdc_fb_data *fb_data, int is_cancelled)
 	}
 	else
 #if !defined(CONFIG_LAB126) || (defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B))
-	if (is_reagl && waveform_mode == fb_data->wv_modes.mode_reagld)
-	{
-		dev_dbg(fb_data->dev, "Doing REAGLD Processing\n");
-		do_reagld_processing_v2_0_1((uint16_t *)fb_data->working_buffer_A_virt,
-				(uint16_t *)fb_data->working_buffer_B_virt,
-				&adj_update_region,
-				fb_data->native_width,
-				fb_data->native_height);
-	}
-	else
+	// if (is_reagl && waveform_mode == fb_data->wv_modes.mode_reagld)
+	// {
+	// 	dev_dbg(fb_data->dev, "Doing REAGLD Processing\n");
+	// 	do_reagld_processing_v2_0_1((uint16_t *)fb_data->working_buffer_A_virt,
+	// 			(uint16_t *)fb_data->working_buffer_B_virt,
+	// 			&adj_update_region,
+	// 			fb_data->native_width,
+	// 			fb_data->native_height);
+	// }
+	// else
 #endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_B
 #endif // CONFIG_FB_MXC_EINK_REAGL
 	if (waveform_mode == WAVEFORM_MODE_AUTO) {
@@ -6330,29 +6326,29 @@ int mxc_epdc_fb_probe(struct platform_device *pdev)
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
 	/* Initialize REAGL buffers. Only needed if REAGL-D is enabled */
-	if (reagl_init(fb_data->native_width) < 0)
-		goto out_dma_work_buf_B;
+	// if (reagl_init(fb_data->native_width) < 0)
+	// 	goto out_dma_work_buf_B;
 #endif
 
-	reagl_algos[REAGL_ALGO_LAB126_FAST] = (struct reagl_algo) {
-		.func       = do_reagl_processing_v_4_lab126,
-		.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
-		.buffer_out = (uint16_t *)fb_data->working_buffer_A_virt,
-		.buffer_tce = fb_data->working_buffer_A_phys
-	};
-	reagl_algos[REAGL_ALGO_LAB126] = (struct reagl_algo) {
-		.func       = do_reagl_processing_v_2_lab126,
-		.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
-		.buffer_out = (uint16_t *)fb_data->working_buffer_A_virt,
-		.buffer_tce = fb_data->working_buffer_A_phys
-	};
+	// reagl_algos[REAGL_ALGO_LAB126_FAST] = (struct reagl_algo) {
+	// 	.func       = do_reagl_processing_v_4_lab126,
+	// 	.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
+	// 	.buffer_out = (uint16_t *)fb_data->working_buffer_A_virt,
+	// 	.buffer_tce = fb_data->working_buffer_A_phys
+	// };
+	// reagl_algos[REAGL_ALGO_LAB126] = (struct reagl_algo) {
+	// 	.func       = do_reagl_processing_v_2_lab126,
+	// 	.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
+	// 	.buffer_out = (uint16_t *)fb_data->working_buffer_A_virt,
+	// 	.buffer_tce = fb_data->working_buffer_A_phys
+	// };
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
-	reagl_algos[REAGL_ALGO_FREESCALE] = (struct reagl_algo) {
-		.func       = do_reagl_processing_v2_2_1,
-		.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
-		.buffer_out = (uint16_t *)fb_data->working_buffer_B_virt,
-		.buffer_tce = fb_data->working_buffer_B_phys
-	};
+	// reagl_algos[REAGL_ALGO_FREESCALE] = (struct reagl_algo) {
+	// 	.func       = do_reagl_processing_v2_2_1,
+	// 	.buffer_in  = (uint16_t *)fb_data->working_buffer_A_virt,
+	// 	.buffer_out = (uint16_t *)fb_data->working_buffer_B_virt,
+	// 	.buffer_tce = fb_data->working_buffer_B_phys
+	// };
 #endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_B
 #endif // CONFIG_FB_MXC_EINK_REAGL
 
@@ -6724,7 +6720,7 @@ out_reagl:
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
 	// This is only needed if REAGL-D is enabled
-	reagl_free();
+	// reagl_free();
 #endif
 #endif // CONFIG_FB_MXC_EINK_REAGL
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
@@ -6827,7 +6823,7 @@ static int mxc_epdc_fb_remove(struct platform_device *pdev)
 	}
 
 #ifdef CONFIG_FB_MXC_EINK_REAGL
-	reagl_free();
+	// reagl_free();
 #endif // CONFIG_FB_MXC_EINK_REAGL
 #endif
 
@@ -7191,7 +7187,8 @@ static int pxp_complete_update(struct mxc_epdc_fb_data *fb_data, u32 *hist_stat)
  * Thanks Bill Atkinson for his dithering algorithm.
  */
 
-#if defined(CONFIG_LAB126)
+//#if defined(CONFIG_LAB126)
+#if 0
 /*
  * Sierra Lite implementation
  *

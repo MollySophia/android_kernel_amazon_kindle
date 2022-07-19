@@ -54,8 +54,8 @@ config FB_MXC_EINK_PANEL
 	select FB_DEFERRED_IO
 	tristate "E-Ink Panel Framebuffer"
 
-// config FB_MXC_EINK_REAGL
-// 	tristate "E-Ink REAGL Algorithm"
+config FB_MXC_EINK_REAGL
+	tristate "E-Ink REAGL Algorithm"
 
 config FB_MXC_EINK_WORK_BUFFER_B
 	bool "Enable use of working buffer B"
